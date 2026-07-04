@@ -11,8 +11,8 @@ TOPIC ?= red-points
 .DEFAULT_GOAL := help
 
 .PHONY: help setup test kafka-install kafka-start kafka-stop kafka-status \
-        kafka-logs consume detector consumer producer pipeline-check clean \
-        docker-up docker-down
+        kafka-logs consume detector consumer producer bridge pipeline-check \
+        metaverse-install metaverse clean docker-up docker-down
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -49,8 +49,12 @@ consume: ## Tail a topic from the console (TOPIC=red-points by default)
 test: ## Run the detection logic test (no Kafka needed)
 	$(PYTHON) tests/test_detection_logic.py
 
+# Default grid size matches the metaverse map (see docs/integration-contract.md);
+# override for the legacy 0-1000 simulator plane: CELL_SIZE=100 make detector
+CELL_SIZE ?= 38
+
 detector: ## Run the Spark red-point detector
-	$(PYTHON) analytics/red_point_detector.py
+	CELL_SIZE=$(CELL_SIZE) $(PYTHON) analytics/red_point_detector.py
 
 consumer: ## Run the red-points consumer (simulated backend)
 	$(PYTHON) simulator/consumer.py
@@ -58,7 +62,18 @@ consumer: ## Run the red-points consumer (simulated backend)
 producer: ## Run the avatar simulator
 	$(PYTHON) simulator/producer.py
 
+bridge: ## Run the WebSocket-Kafka bridge (metaverse backend)
+	$(PYTHON) backend/bridge.py
+
 pipeline-check: kafka-status test ## Verify broker is up and logic test passes
+
+# --- Metaverse frontend (bun) --------------------------------------------------
+
+metaverse-install: ## Install metaverse frontend dependencies (first time)
+	cd desarrollo/ecci-metaverse && bun install
+
+metaverse: ## Run the metaverse dev server (Vite via bun)
+	cd desarrollo/ecci-metaverse && bun run dev
 
 # --- Docker alternative (host with Docker only) -------------------------------
 

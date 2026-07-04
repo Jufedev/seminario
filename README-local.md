@@ -87,6 +87,49 @@ make producer
    bloqueada — este es el evento que el backend del metaverso usará para
    recalcular rutas.
 
+## Integración con el metaverso (Three.js)
+
+El metaverso reemplaza al simulador como fuente real de posiciones. El bridge
+(`backend/bridge.py`) traduce entre el WebSocket del navegador y Kafka en ambos
+sentidos. Contrato completo (topics, esquemas, mapeo de coordenadas):
+`docs/integration-contract.md`.
+
+**1. Arrancar el detector con la grilla del mapa del metaverso** (terminal 1):
+
+```bash
+CELL_SIZE=38 make detector
+```
+
+**2. Arrancar el bridge WebSocket↔Kafka** (terminal 2):
+
+```bash
+make bridge      # ws://localhost:8765 (BRIDGE_HOST/BRIDGE_PORT para cambiarlo)
+```
+
+**3. Arrancar el metaverso** (terminal 3):
+
+```bash
+make metaverse-install   # solo la primera vez (bun install)
+make metaverse           # Vite dev server
+```
+
+**4. Conectar el frontend al bridge**: crear `desarrollo/ecci-metaverse/.env`
+con el contenido de `env.example`:
+
+```bash
+VITE_BRIDGE_WS_URL=ws://localhost:8765
+```
+
+Sin esta variable el metaverso funciona standalone (modo simulado, sin backend).
+
+**5. Elegir el modo de detección** en la vista de configuración del metaverso:
+
+- **Local (en el navegador)** — default: las zonas rojas se calculan en el
+  cliente; no requiere pipeline.
+- **Pipeline (Spark vía bridge)** — variable experimental de la tesis (H1):
+  las zonas rojas llegan únicamente desde `red-points`; el navegador las
+  aplica al ruteo (penalización Dijkstra + recálculo de rutas).
+
 ## Validar la lógica de detección sin Docker
 
 La lógica del punto rojo se puede probar sin levantar Kafka (solo requiere
@@ -99,6 +142,12 @@ make test
 El test ejecuta `detect_red_points()` en modo batch con tres escenarios:
 6 avatares detenidos en una celda (debe detectarse), 4 detenidos (bajo el
 umbral, no debe), y 5 en movimiento (no debe).
+
+El mapeo metaverso↔pipeline del bridge se prueba sin Kafka ni Spark:
+
+```bash
+python3 tests/test_bridge_mapping.py
+```
 
 ## Parámetros de detección (variables de entorno)
 
