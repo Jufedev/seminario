@@ -1,0 +1,17 @@
+{
+  "name": "ecci-metaverse",
+  "version": "1.0.0",
+  "description": "ECCI BigData Metaverse — Fase 1: Ciudad 3D",
+  "type": "module",
+  "scripts": {
+    "dev":   "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "three": "^0.165.0"
+  },
+  "devDependencies": {
+    "vite": "^5.3.0"
+  }
+}

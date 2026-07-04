@@ -1,0 +1,6 @@
+checkpoints/
+__pycache__/
+.venv/
+.env
+node_modules/
+dist/

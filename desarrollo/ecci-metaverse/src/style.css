@@ -1,0 +1,142 @@
+/* ════════════════════════════════════════════════════════════════
+   ESTILOS GLOBALES — compartidos por las 3 vistas
+   ════════════════════════════════════════════════════════════════ */
+:root {
+  --bg: #070c14;
+  --panel-bg: rgba(15, 21, 33, 0.88);
+  --panel-border: rgba(255, 255, 255, 0.09);
+  --text: #e2eaf5;
+  --text-dim: #7c8aa0;
+  --accent: #3b82f6;
+  --accent-strong: #2563eb;
+  --green: #34d399;
+  --amber: #fbbf24;
+  --red: #f87171;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; }
+body { background: var(--bg); color: var(--text); overflow: hidden; }
+#app { width: 100vw; height: 100vh; display: block; overflow: auto; }
+
+button { font-family: inherit; cursor: pointer; }
+.btn {
+  padding: 13px 32px; background: var(--accent-strong); border: none; border-radius: 10px;
+  color: #fff; font-size: 15px; font-weight: 700; transition: background .15s;
+}
+.btn:hover { background: var(--accent); }
+.btn.secondary { background: rgba(255,255,255,0.08); }
+.btn.secondary:hover { background: rgba(255,255,255,0.16); }
+.btn:disabled { opacity: .4; cursor: not-allowed; }
+
+.panel {
+  background: var(--panel-bg); backdrop-filter: blur(12px);
+  border: 1px solid var(--panel-border); border-radius: 14px; padding: 16px 20px;
+}
+.panel h3 {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 1.2px;
+  color: var(--text-dim); font-weight: 700; margin-bottom: 6px;
+}
+
+input[type="range"] {
+  width: 100%; accent-color: var(--accent);
+}
+
+/* ── Vista Portada ── */
+.view-portada {
+  min-height: 100vh; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; text-align: center; padding: 40px 24px; gap: 14px;
+}
+.view-portada h1 { font-size: 40px; font-weight: 800; }
+.view-portada .subtitle { color: var(--text-dim); max-width: 640px; line-height: 1.6; font-size: 15px; }
+.view-portada .pregunta {
+  margin: 10px 0; padding: 16px 24px; border-left: 3px solid var(--accent);
+  background: rgba(59,130,246,0.08); border-radius: 8px; max-width: 640px; text-align: left;
+}
+.view-portada .pregunta strong { color: var(--accent); display: block; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
+.integrantes { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; margin: 6px 0; }
+.integrantes .chip {
+  background: rgba(255,255,255,0.06); border: 1px solid var(--panel-border);
+  border-radius: 20px; padding: 6px 16px; font-size: 13px; color: var(--text-dim);
+}
+
+/* ── Vista Configuración ── */
+.view-config { min-height: 100vh; display: flex; flex-direction: column; padding: 24px 32px; gap: 18px; }
+.view-config .topbar { display: flex; justify-content: space-between; align-items: center; }
+.view-config .topbar h2 { font-size: 20px; }
+.config-grid { display: grid; grid-template-columns: 1.4fr 1fr; gap: 20px; flex: 1; min-height: 0; }
+#minimap-canvas { width: 100%; height: 100%; display: block; border-radius: 12px; background: #0d1520; cursor: pointer; }
+.config-side { display: flex; flex-direction: column; gap: 16px; overflow-y: auto; }
+.od-pill { display: flex; gap: 10px; }
+.od-pill .box {
+  flex: 1; border-radius: 10px; padding: 10px 14px; border: 1px solid var(--panel-border);
+  font-size: 13px;
+}
+.od-pill .box.origin { border-color: var(--green); }
+.od-pill .box.dest { border-color: var(--red); }
+.od-pill .box .lbl { color: var(--text-dim); font-size: 10px; text-transform: uppercase; letter-spacing: 1px; }
+.od-pill .box .val { font-weight: 700; margin-top: 2px; }
+.slider-row { display: flex; flex-direction: column; gap: 6px; }
+.slider-row .head { display: flex; justify-content: space-between; font-size: 13px; }
+.slider-row .head b { color: var(--accent); }
+
+/* ── Vista Simulación ── */
+.view-sim { position: relative; width: 100vw; height: 100vh; overflow: hidden; }
+#sim-canvas { display: block; width: 100%; height: 100%; }
+.sim-topbar {
+  position: absolute; top: 14px; left: 14px; right: 14px; display: flex;
+  justify-content: space-between; align-items: flex-start; gap: 12px; pointer-events: none;
+  z-index: 10;
+}
+.sim-topbar > * { pointer-events: auto; }
+.cam-toggle { display: flex; gap: 4px; }
+.cam-toggle button {
+  border: 1px solid var(--panel-border); background: var(--panel-bg); color: var(--text-dim);
+  padding: 8px 16px; font-size: 13px; font-weight: 700; border-radius: 8px;
+}
+.cam-toggle button.active { background: var(--accent-strong); color: #fff; border-color: var(--accent-strong); }
+.sim-metrics { display: flex; flex-direction: column; gap: 4px; min-width: 220px; }
+.sim-metrics .row { display: flex; justify-content: space-between; font-size: 12px; }
+.sim-metrics .row .k { color: var(--text-dim); }
+.sim-metrics .row .v { font-weight: 700; }
+
+/* ── Dashboard de analítica (Vista 3) ── */
+.dash-fab {
+  position: absolute; bottom: 16px; right: 16px; z-index: 12; pointer-events: auto;
+}
+.dash-panel {
+  position: absolute; right: 16px; bottom: 66px; width: min(880px, calc(100vw - 32px));
+  max-height: calc(100vh - 100px); overflow-y: auto; z-index: 12; pointer-events: auto;
+  display: flex; flex-direction: column; gap: 14px;
+}
+.dash-panel.hidden { display: none; }
+.dash-head { display: flex; justify-content: space-between; align-items: center; }
+.dash-head h3 { font-size: 15px; }
+.dash-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; }
+.kpi-tile {
+  background: rgba(255,255,255,0.04); border: 1px solid var(--panel-border);
+  border-radius: 10px; padding: 10px 12px; text-align: center;
+}
+.kpi-tile .kpi-val { font-size: 18px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.kpi-tile .kpi-lbl { font-size: 10px; color: var(--text-dim); margin-top: 2px; text-transform: uppercase; letter-spacing: .4px; }
+.dash-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.dash-card {
+  background: rgba(255,255,255,0.03); border: 1px solid var(--panel-border);
+  border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px;
+  min-width: 0;   /* evita que el <canvas> (ancho intrínseco 300px) "explote" la columna del grid */
+}
+.dash-card.wide { grid-column: span 3; }
+.dash-card h4 { font-size: 11px; color: var(--text-dim); font-weight: 700; text-transform: uppercase; letter-spacing: .4px; }
+.dash-chart-wrap { height: 120px; position: relative; }
+.dash-heatmap { width: 100%; height: 120px; display: block; border-radius: 6px; }
+.dash-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.dash-table th, .dash-table td { padding: 6px 8px; text-align: center; border-bottom: 1px solid var(--panel-border); }
+.dash-table th:first-child, .dash-table td:first-child { text-align: left; color: var(--text-dim); }
+.dash-formulas {
+  display: flex; flex-wrap: wrap; gap: 14px; font-size: 11px; color: var(--text-dim);
+  border-top: 1px solid var(--panel-border); padding-top: 10px; font-family: ui-monospace, Consolas, monospace;
+}
+@media (max-width: 900px) {
+  .dash-grid { grid-template-columns: 1fr; }
+  .dash-card.wide { grid-column: span 1; }
+}

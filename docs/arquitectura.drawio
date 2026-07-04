@@ -1,0 +1,144 @@
+<mxfile host="app.diagrams.net" agent="architecture" version="24.0.0">
+  <diagram id="prod-azure" name="Producción (Azure)">
+    <mxGraphModel dx="1600" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1000" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="a-title" value="ARQUITECTURA DE PRODUCCIÓN — Detección de comportamientos relevantes en metaversos mediante Big Data en tiempo real" style="text;html=1;align=center;fontSize=16;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="200" y="10" width="1200" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="a-internet" value="INTERNET — Usuarios del metaverso" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=none;strokeColor=#666666;verticalAlign=top;fontStyle=1;fontSize=12;fontColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="40" y="200" width="260" height="420" as="geometry" />
+        </mxCell>
+        <mxCell id="a-browser" value="NAVEGADOR — Three.js&#10;&#10;Renderiza el metaverso 3D.&#10;El usuario elige punto A y B,&#10;la cantidad de avatares (carros)&#10;y ve rutas y puntos rojos en vivo." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;align=left;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="70" y="320" width="200" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="a-sub" value="SUSCRIPCIÓN AZURE — Azure for Students ($100 USD / 12 meses, sin tarjeta de crédito)" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=none;strokeColor=#0078D4;verticalAlign=top;fontStyle=1;fontSize=13;fontColor=#0078D4;" vertex="1" parent="1">
+          <mxGeometry x="340" y="60" width="1220" height="880" as="geometry" />
+        </mxCell>
+        <mxCell id="a-rg" value="RESOURCE GROUP: rg-metaverso — región eastus2 — provisionado con Terraform (carpeta infra/)" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=#FAFAFA;strokeColor=#3399FF;verticalAlign=top;fontStyle=1;fontSize=12;fontColor=#3399FF;" vertex="1" parent="1">
+          <mxGeometry x="370" y="120" width="1160" height="700" as="geometry" />
+        </mxCell>
+        <mxCell id="a-backend" value="BACKEND DEL METAVERSO&#10;Azure Container Apps / App Service&#10;&#10;• Servidor WebSocket hacia el navegador&#10;• Cliente Kafka hacia Event Hubs&#10;• Traduce: posición de avatar → evento JSON&#10;• Recibe puntos rojos → ordena recálculo de ruta" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#0078D4;strokeColor=#005A9E;fontColor=#ffffff;fontSize=11;align=left;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="410" y="300" width="250" height="160" as="geometry" />
+        </mxCell>
+        <mxCell id="a-evhns" value="AZURE EVENT HUBS — namespace (tier Standard, 1 TU)&#10;Rol: &quot;Apache Kafka&quot; administrado — transporte y desacople&#10;Endpoint Kafka: puerto 9093 · autenticación SASL_SSL" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DEECF9;strokeColor=#0078D4;verticalAlign=top;fontSize=11;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="720" y="170" width="300" height="390" as="geometry" />
+        </mxCell>
+        <mxCell id="a-hub-pos" value="topic: avatar-positions&#10;4 particiones · retención 1 día&#10;(entrada: telemetría de avatares)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#1A1A1A;strokeColor=#000000;fontColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="745" y="260" width="250" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="a-hub-red" value="topic: red-points&#10;1 partición · retención 1 día&#10;(salida: eventos de bloqueo detectados)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#1A1A1A;strokeColor=#000000;fontColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="745" y="440" width="250" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="a-dbx" value="AZURE DATABRICKS — Spark Structured Streaming&#10;Job: analytics/red_point_detector.py&#10;&#10;Detección del punto rojo (micro-batches de 1–5 s):&#10;1. Filtra avatares con speed &lt; 0.5 (detenidos)&#10;2. Mapea posición a celda de grid 100×100&#10;3. Ventana deslizante 60 s, reevaluada cada 10 s&#10;4. ≥ 5 avatares distintos quietos en una celda&#10;    → emite PUNTO ROJO (modo update: mínima latencia)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E25A1C;strokeColor=#B23C0E;fontColor=#ffffff;fontSize=11;align=left;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="1100" y="180" width="380" height="190" as="geometry" />
+        </mxCell>
+        <mxCell id="a-adls" value="ADLS GEN2 (Storage Account, LRS, hierarchical namespace)&#10;&#10;• Archivo histórico crudo de todos los eventos (Big Data)&#10;• Checkpoints del job de Spark (offsets + estado de ventanas)&#10;• Base para análisis batch posterior (comparación batch vs streaming)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#0078D4;strokeColor=#005A9E;fontColor=#ffffff;fontSize=11;align=left;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="1100" y="420" width="380" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="a-budget" value="GOBERNANZA DE COSTOS&#10;Consumption Budget: $50/mes&#10;→ alerta por email al 80% de consumo&#10;(protege los créditos de estudiante)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;fontSize=11;align=left;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="410" y="520" width="250" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="a-schema" value="ESQUEMA DE DATOS (JSON)&#10;&#10;Entrada (avatar-positions):&#10;{ &quot;avatar_id&quot;: &quot;av-001&quot;, &quot;x&quot;: 457.3,&#10;  &quot;y&quot;: 455.9, &quot;speed&quot;: 0.0,&#10;  &quot;ts&quot;: &quot;2026-07-03T17:00:00Z&quot; }&#10;&#10;Salida (red-points):&#10;{ &quot;cell_x&quot;: 4, &quot;cell_y&quot;: 4,&#10;  &quot;center_x&quot;: 450.0, &quot;center_y&quot;: 450.0,&#10;  &quot;stationary_avatars&quot;: 49,&#10;  &quot;window_start&quot;: &quot;…&quot;, &quot;window_end&quot;: &quot;…&quot; }" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F5F5;strokeColor=#666666;fontSize=10;align=left;spacingLeft=8;fontFamily=Courier New;" vertex="1" parent="1">
+          <mxGeometry x="720" y="590" width="300" height="210" as="geometry" />
+        </mxCell>
+        <mxCell id="a-costs" value="COSTO MENSUAL ESTIMADO EN OPERACIÓN — Event Hubs Standard: ~$11 fijo · Databricks: ~$0.50/hora SOLO con cluster prendido (single-node, auto-terminate 30 min, se usa en demos) · Storage: centavos · Budget/RG: gratis · TOTAL típico: &lt; $25/mes" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="370" y="850" width="1160" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="a-legend" value="LEYENDA DE COLORES&#10;&#10;■ Verde: cliente / componentes propios&#10;■ Azul: servicios administrados de Azure&#10;■ Negro: topics Kafka (canales de eventos)&#10;■ Naranja: procesamiento analítico (Spark)&#10;■ Amarillo: gobernanza y costos" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#666666;fontSize=11;align=left;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="1100" y="590" width="380" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="a-e1" value="① WebSocket bidireccional:&#10;↓ posiciones de avatares (continuo)&#10;↑ rutas recalculadas y puntos rojos" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;startArrow=classic;startFill=1;fontSize=11;fontStyle=1;" edge="1" parent="1" source="a-browser" target="a-backend">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="a-e2" value="② Publica cada posición&#10;(protocolo Kafka, 9093, SASL_SSL)" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=11;fontStyle=1;exitX=1;exitY=0.25;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="a-backend" target="a-hub-pos">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="a-e3" value="③ Spark consume el stream&#10;(consumer group: spark-detector)" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=11;fontStyle=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="a-hub-pos" target="a-dbx">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="a-e4" value="④ Publica el evento&#10;de punto rojo detectado" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=11;fontStyle=1;exitX=0;exitY=0.75;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="a-dbx" target="a-hub-red">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="a-e5" value="⑤ Archiva eventos crudos&#10;+ checkpoints (dashed = flujo secundario)" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=11;dashed=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="a-dbx" target="a-adls">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="a-e6" value="⑥ Backend consume los puntos rojos&#10;(consumer group: metaverse-backend)" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=11;fontStyle=1;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.75;entryDx=0;entryDy=0;" edge="1" parent="1" source="a-hub-red" target="a-backend">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="a-note-flow" value="⑦ Al recibir un punto rojo, el backend empuja el evento por WebSocket (①) y el Three.js recalcula la ruta óptima de los avatares que aún no llegaron a la zona bloqueada — cerrando el ciclo de la hipótesis H1." style="text;html=1;align=left;verticalAlign=middle;fillColor=#E1F5E1;strokeColor=#82b366;rounded=1;fontSize=11;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="410" y="660" width="250" height="140" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="dev-qa-local" name="Dev/QA (Local — Distrobox)">
+    <mxGraphModel dx="1600" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1000" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="b-title" value="ARQUITECTURA DEV/QA — mismo sistema que producción, ejecutado 100% local a costo cero" style="text;html=1;align=center;fontSize=16;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="200" y="10" width="1200" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="b-host" value="HOST: CachyOS (bare metal) — se mantiene limpio: cero dependencias del proyecto instaladas en el sistema" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=none;strokeColor=#666666;verticalAlign=top;fontStyle=1;fontSize=13;fontColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="40" y="50" width="1520" height="910" as="geometry" />
+        </mxCell>
+        <mxCell id="b-box" value="DISTROBOX &quot;seminario&quot; — Ubuntu 24.04 · OpenJDK 17 · Python 3.12 (venv) — comparte $HOME y red con el host" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=#FBF7FF;strokeColor=#9673A6;verticalAlign=top;fontStyle=1;fontSize=13;fontColor=#9673A6;" vertex="1" parent="1">
+          <mxGeometry x="80" y="120" width="1440" height="800" as="geometry" />
+        </mxCell>
+        <mxCell id="b-make" value="INTERFAZ OPERATIVA — Makefile (make help)&#10;&#10;make setup · make kafka-install · make kafka-start&#10;make detector · make consumer · make producer&#10;make consume TOPIC=x · make clean (borra checkpoints)&#10;Kafka operado por scripts/kafka-local.sh" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F5F5;strokeColor=#666666;fontSize=11;align=left;spacingLeft=8;fontFamily=Courier New;" vertex="1" parent="1">
+          <mxGeometry x="110" y="170" width="400" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="b-parity" value="PARIDAD CON PRODUCCIÓN&#10;&#10;El detector es EL MISMO archivo que corre en Databricks.&#10;Para apuntar a Azure solo se definen 2 variables de entorno:&#10;KAFKA_BOOTSTRAP = &lt;namespace&gt;.servicebus.windows.net:9093&#10;EVENTHUBS_CONNECTION_STRING = Endpoint=sb://…&#10;(local usa localhost:9092 sin autenticación — PLAINTEXT)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;fontSize=11;align=left;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="1050" y="170" width="440" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="b-producer" value="SIMULADOR DEL METAVERSO&#10;simulator/producer.py [make producer]&#10;&#10;• 50 avatares viajan de A(0,0) a B(1000,1000)&#10;• Salidas escalonadas (0–30 s)&#10;• A los 20 s: bloqueo en (500,500) radio 60&#10;   → los avatares que llegan quedan detenidos&#10;• Solo emite avatares ACTIVOS (entre salida&#10;   y llegada) — evita falsos puntos rojos en A y B&#10;• Será reemplazado por el backend Three.js real&#10;   (mismo esquema JSON, mismo topic)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;align=left;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="110" y="380" width="320" height="220" as="geometry" />
+        </mxCell>
+        <mxCell id="b-kafka" value="APACHE KAFKA 3.9.1 — nativo, SIN Docker&#10;KRaft single-node (sin ZooKeeper) · localhost:9092 (PLAINTEXT)&#10;instalado en ~/.local · datos en kraft-data/" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DEECF9;strokeColor=#1A1A1A;verticalAlign=top;fontSize=11;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="500" y="350" width="320" height="330" as="geometry" />
+        </mxCell>
+        <mxCell id="b-topic-pos" value="topic: avatar-positions&#10;(~50 mensajes/segundo)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#1A1A1A;strokeColor=#000000;fontColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="530" y="430" width="260" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="b-topic-red" value="topic: red-points&#10;(eventos de bloqueo)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#1A1A1A;strokeColor=#000000;fontColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="530" y="570" width="260" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="b-detector" value="DETECTOR DE PUNTOS ROJOS&#10;analytics/red_point_detector.py [make detector]&#10;PySpark 3.5 — Spark Structured Streaming local&#10;&#10;1. Filtra speed &lt; 0.5 (avatares detenidos)&#10;2. Celda de grid: floor(x/100), floor(y/100)&#10;3. Ventana deslizante 60 s / evaluada cada 10 s&#10;4. ≥ 5 avatares distintos quietos → PUNTO ROJO" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E25A1C;strokeColor=#B23C0E;fontColor=#ffffff;fontSize=11;align=left;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="920" y="350" width="360" height="180" as="geometry" />
+        </mxCell>
+        <mxCell id="b-checkpoints" value="checkpoints/ — memoria del stream (offsets leídos + estado de ventanas).&#10;Permite reanudar sin perder ni duplicar. make clean al cambiar parámetros." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8CECC;strokeColor=#B85450;fontSize=10;align=left;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="920" y="560" width="360" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="b-consumer" value="BACKEND SIMULADO&#10;simulator/consumer.py [make consumer]&#10;&#10;• Escucha red-points y deduplica por celda&#10;• Imprime NEW RED POINT / update&#10;• Punto de integración marcado: aquí el backend&#10;   real hará push WebSocket al Three.js" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;align=left;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="920" y="660" width="360" height="160" as="geometry" />
+        </mxCell>
+        <mxCell id="b-schema" value="ESQUEMA DE DATOS (idéntico a producción)&#10;&#10;{ &quot;avatar_id&quot;: &quot;av-001&quot;,&#10;  &quot;x&quot;: 457.3, &quot;y&quot;: 455.9,&#10;  &quot;speed&quot;: 0.0,&#10;  &quot;ts&quot;: &quot;2026-07-03T17:00:00Z&quot; }" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F5F5;strokeColor=#666666;fontSize=10;align=left;spacingLeft=8;fontFamily=Courier New;" vertex="1" parent="1">
+          <mxGeometry x="110" y="660" width="320" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="b-tests" value="VALIDACIÓN — make test&#10;tests/test_detection_logic.py ejecuta detect_red_points() en modo batch&#10;(sin Kafka): 6 quietos → detecta · 4 quietos → no · 5 en movimiento → no" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E1F5E1;strokeColor=#82b366;fontSize=10;align=left;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="500" y="720" width="320" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="b-e1" value="① Publica posiciones JSON&#10;(1 evento/avatar/segundo)" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=11;fontStyle=1;exitX=1;exitY=0.25;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="b-producer" target="b-topic-pos">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="b-e2" value="② Spark consume el stream&#10;(micro-batches)" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=11;fontStyle=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="b-topic-pos" target="b-detector">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="b-e3" value="③ Publica el punto rojo&#10;(modo update: apenas cruza el umbral)" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=11;fontStyle=1;exitX=0;exitY=0.75;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="b-detector" target="b-topic-red">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="b-e4" value="estado&#10;(flujo interno)" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=10;dashed=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="b-detector" target="b-checkpoints">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="b-e5" value="④ Consume eventos y deduplica&#10;(consumer group: metaverse-backend)" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=11;fontStyle=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="b-topic-red" target="b-consumer">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="b-e6" value="⑤ MEDICIÓN DE LA HIPÓTESIS H1: t(5º avatar quieto en el simulador) → t(NEW RED POINT en el consumidor) = tiempo de detección del bloqueo" style="text;html=1;align=left;verticalAlign=middle;fillColor=#E1F5E1;strokeColor=#82b366;rounded=1;fontSize=11;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="1310" y="350" width="180" height="180" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
