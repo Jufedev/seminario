@@ -13,6 +13,7 @@ import { TrafficSystem } from '../sim/traffic.js'
 import { IncidentManager } from '../sim/incidents.js'
 import { SIM_CONFIG } from '../sim/config.js'
 import { ZoneSystem } from '../analytics/zones.js'
+import { attachPipeline } from '../analytics/pipeline.js'
 import { Dashboard } from '../analytics/dashboard.js'
 
 // ════════════════════════════════════════════════════════════════
@@ -33,6 +34,10 @@ export function renderSimulacion(app) {
   // Red de seguridad: si una simulación anterior dejó bloqueos/penalizaciones sin
   // limpiar (aunque dispose() ya debería haberlo hecho), esto garantiza un grafo limpio.
   resetGraph()
+
+  // Live mode: connect to the bridge backend if VITE_BRIDGE_WS_URL is set
+  // (no-op otherwise; the producer stays in simulated mode).
+  kafka.connect()
 
   const view = document.createElement('div')
   view.className = 'view-sim'
@@ -62,6 +67,16 @@ export function renderSimulacion(app) {
       </div>
     </div>
   `
+  // Pipeline mode with no bridge configured would silently disable ALL
+  // detection (local flagging off, nothing arriving from Spark): make it loud.
+  if (store.detectionMode === 'pipeline' && !kafka.isLive()) {
+    console.warn('[sim] Detection mode "pipeline" but no bridge configured (VITE_BRIDGE_WS_URL); no red zones will be detected')
+    const warn = document.createElement('div')
+    warn.className = 'panel'
+    warn.style.cssText = 'position:absolute;top:8px;left:50%;transform:translateX(-50%);z-index:10;border:1px solid #c0392b;color:#c0392b;padding:8px 12px'
+    warn.textContent = 'Modo pipeline sin puente configurado (VITE_BRIDGE_WS_URL): no se detectarán zonas rojas'
+    view.appendChild(warn)
+  }
   app.appendChild(view)
   view.querySelector('#btn-back').addEventListener('click', () => navigate('#/config'))
 
@@ -135,7 +150,10 @@ export function renderSimulacion(app) {
   const incidentManager = new IncidentManager(scene, {
     agentSystem, graphEdges: allEdges(), frequencySec: store.incidentFreq,
   })
-  const zoneSystem = new ZoneSystem(scene, { agentSystem, incidentManager })
+  const zoneSystem = new ZoneSystem(scene, { agentSystem, incidentManager, detectionMode: store.detectionMode })
+  // Pipeline red points arriving through the bridge feed the zone system
+  // (only applied when detectionMode is 'pipeline').
+  const detachPipeline = attachPipeline(zoneSystem)
   const dashboard = new Dashboard(view, {
     agentSystem, zoneSystem, incidentManager,
     optimalDistanceMeters: routeInfo ? routeInfo.meters : 0,
@@ -218,6 +236,8 @@ export function renderSimulacion(app) {
   window.__teardownView = () => {
     cancelAnimationFrame(rafId)
     window.removeEventListener('resize', resize)
+    detachPipeline()
+    kafka.disconnect()
     controls.dispose()
     dashboard.dispose()
     zoneSystem.dispose()

@@ -20,10 +20,16 @@ import { ANALYTICS_CONFIG as CFG } from './config.js'
 //  que los siguientes avatares (y los que ya van en camino) la eviten.
 // ════════════════════════════════════════════════════════════════
 export class ZoneSystem {
-  constructor(scene, { agentSystem, incidentManager }) {
+  constructor(scene, { agentSystem, incidentManager, detectionMode }) {
     this.scene = scene
     this.agentSystem = agentSystem
     this.incidentManager = incidentManager
+    // 'local' (default): zones turn red from the in-browser C index.
+    // 'pipeline': red zones come ONLY from the external Spark detector
+    // (via applyExternalRedZone); C keeps being computed as a metric.
+    this.detectionMode = detectionMode ?? 'local'
+    this._externalRed = new Map()   // zone index -> expiry (simTime seconds)
+    this._simTime = 0
 
     this.cfg = CFG   // expuesto para lectura/depuración en vivo (window.__DEBUG_SIM.zoneSystem.cfg)
     const n = CFG.GRID_SIZE * CFG.GRID_SIZE
@@ -91,6 +97,7 @@ export class ZoneSystem {
 
   // ── Ciclo por frame: acumula tiempo, recalcula cada ~1s, y suaviza la opacidad visual ──
   update(dt, simTime) {
+    this._simTime = simTime
     this._acc += dt
     if (this._acc >= CFG.ZONE_WINDOW_S) {
       this._acc = 0
@@ -104,7 +111,19 @@ export class ZoneSystem {
     }
   }
 
+  // Phase 4 hook: mark the zone containing world point (x, z) as red, driven
+  // by the external pipeline (Spark red point relayed through the bridge).
+  // The TTL keeps the zone red between detector re-emissions; it expires if
+  // the detector stops re-emitting the cell.
+  applyExternalRedZone(x, z, ttlS = 30) {
+    if (this.detectionMode !== 'pipeline') return
+    const idx = this.zoneIndexAt(x, z)
+    this._externalRed.set(idx, this._simTime + ttlS)
+    this._acc = CFG.ZONE_WINDOW_S   // force a recompute on the next frame (low latency)
+  }
+
   _recompute(simTime) {
+    for (const [zi, exp] of this._externalRed) if (exp <= simTime) this._externalRed.delete(zi)
     const as = this.agentSystem
     const counts = new Float32Array(this.n)
     const speedSum = new Float32Array(this.n)
@@ -144,9 +163,16 @@ export class ZoneSystem {
       this.sampleCount[z]++
 
       const wasRed = this.isRed[z] === 1
-      const nowRed = C >= CFG.C_RED_THRESHOLD
+      // 'pipeline' mode: the local C index never flags zones by itself; a fixed
+      // full penalty is applied because the external C is unknown here.
+      const nowRed = this.detectionMode === 'pipeline'
+        ? (this._externalRed.get(z) ?? -Infinity) > simTime
+        : C >= CFG.C_RED_THRESHOLD
+      const penalty = this.detectionMode === 'pipeline'
+        ? CFG.ZONE_PENALTY_SCALE
+        : CFG.ZONE_PENALTY_SCALE * C
       if (nowRed && !wasRed) {
-        setEdgePenalty2(this.zoneEdges[z], CFG.ZONE_PENALTY_SCALE * C)
+        setEdgePenalty2(this.zoneEdges[z], penalty)
         invalidateRoutesThroughZone(this.zoneNodeIds[z])
         this.agentSystem.rerouteAgentsThroughZone(this.zoneNodeIds[z])
         kafka.send('zone.red', { zone: z, C: +C.toFixed(2), density: +density.toFixed(2), ts: Date.now() })
@@ -155,7 +181,7 @@ export class ZoneSystem {
         kafka.send('zone.clear', { zone: z, ts: Date.now() })
       } else if (nowRed) {
         // sigue roja: actualiza la penalización si C cambió
-        setEdgePenalty2(this.zoneEdges[z], CFG.ZONE_PENALTY_SCALE * C)
+        setEdgePenalty2(this.zoneEdges[z], penalty)
       }
       this.isRed[z] = nowRed ? 1 : 0
       if (nowRed) for (const id of this.zoneNodeIds[z]) redNodeIds.add(id)

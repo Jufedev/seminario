@@ -82,6 +82,8 @@ export class AgentSystem {
     this.rerouteCount = 0
     this.rerouteByReason = { atascado: 0, zona_roja: 0 }
     this._kafkaSampleTimer = 0
+    this._positionEmitTimer = 0
+    this._lastEmitSimTime = -1
     // Aristas con avatares circulando ahora mismo → nº de avatares sobre cada una.
     // La Fase 3 la usa para poner incidentes donde hay más tráfico (más realista y
     // concentra la congestión, en vez de repartir incidentes por todo el mapa)
@@ -118,6 +120,10 @@ export class AgentSystem {
     this.stuckAccum = new Float32Array(n)
     this.lastCheckX = new Float32Array(n)
     this.lastCheckZ = new Float32Array(n)
+    // Last position sent to the pipeline, to derive measured speed per emit
+    this._emitX = new Float32Array(n)
+    this._emitZ = new Float32Array(n)
+    this._emitHas = new Uint8Array(n)
 
     // Temporales reutilizables — se crean una sola vez, se reescriben cada frame
     this._m4 = new THREE.Matrix4()
@@ -176,6 +182,36 @@ export class AgentSystem {
         sampled_at: Date.now(), moving, waiting, stuck,
         arrived: this.arrivedCount, avg_speed_mps: +((speedSum / Math.max(1, moving + waiting)) * UNIT_TO_METERS).toFixed(2),
       })
+    }
+
+    // Per-avatar position stream for the analytics pipeline (~1 msg/s per agent,
+    // the rate the Spark detector was designed for). Only emitted in live mode:
+    // in simulated mode it would flood the console/log without any consumer.
+    this._positionEmitTimer += dt * 1000
+    if (this._positionEmitTimer >= SIM_CONFIG.POSITION_EMIT_MS) {
+      this._positionEmitTimer = 0
+      if (kafka.isLive()) {
+        // speed_mps is MEASURED displacement since the previous emit, not the
+        // internal speed[i]: that one chases the target speed and stays near
+        // cruise for cars queued behind a leader, which would hide real jams
+        // from the detector (its stationary filter is speed < 0.5 m/s).
+        const elapsed = this._lastEmitSimTime >= 0 ? this.simTime - this._lastEmitSimTime : 0
+        for (let i = 0; i < this.total; i++) {
+          if (!this.active[i] || this.state[i] === AGENT_STATE.ARRIVED) continue
+          const x = this.posX[i], z = this.posZ[i]
+          const speedUnits = (this._emitHas[i] && elapsed > 0)
+            ? Math.hypot(x - this._emitX[i], z - this._emitZ[i]) / elapsed
+            : this.speed[i] // first sample for this agent: no displacement yet
+          this._emitX[i] = x; this._emitZ[i] = z; this._emitHas[i] = 1
+          kafka.send('agent.position', {
+            agent_id: i,
+            x: +x.toFixed(2),
+            z: +z.toFixed(2),
+            speed_mps: +(speedUnits * UNIT_TO_METERS).toFixed(2),
+          })
+        }
+        this._lastEmitSimTime = this.simTime
+      }
     }
 
     return { moving, waiting, stuck, arrived: this.arrivedCount, spawned: this.spawned, total: this.total }

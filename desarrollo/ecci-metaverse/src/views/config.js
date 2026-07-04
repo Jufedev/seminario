@@ -39,6 +39,13 @@ export function renderConfig(app) {
             <div class="head"><span>Frecuencia de incidentes</span><b id="lbl-freq">cada ${store.incidentFreq}s</b></div>
             <input type="range" id="sl-freq" min="3" max="60" value="${store.incidentFreq}" />
           </div>
+          <div class="slider-row" style="margin-top:14px">
+            <div class="head"><span>Detección de zonas rojas</span></div>
+            <select id="sel-detection" style="width:100%;margin-top:6px">
+              <option value="local">Local (en el navegador)</option>
+              <option value="pipeline">Pipeline (Spark vía bridge)</option>
+            </select>
+          </div>
         </div>
         <button class="btn" id="btn-start" disabled>Iniciar simulación</button>
       </div>
@@ -154,6 +161,12 @@ export function renderConfig(app) {
   slFreq.addEventListener('input', () => {
     store.incidentFreq = +slFreq.value
     lblFreq.textContent = `cada ${store.incidentFreq}s`
+  })
+
+  const selDetection = view.querySelector('#sel-detection')
+  selDetection.value = store.detectionMode
+  selDetection.addEventListener('change', () => {
+    store.detectionMode = selDetection.value
   })
 
   btnStart.addEventListener('click', () => {

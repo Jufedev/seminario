@@ -14,6 +14,7 @@ export const SIM_CONFIG = {
   STUCK_TIME: 4,             // segundos sin avanzar (fuera de un semáforo en rojo) → atascado
   LIGHT_PERIOD: 15,          // segundos por fase de semáforo (sincronizado en todo el mapa)
   KAFKA_SAMPLE_MS: 500,      // frecuencia del muestreo agregado de posición hacia Kafka
+  POSITION_EMIT_MS: 1000,    // per-avatar position stream cadence (live mode only, ~1 msg/s per agent)
   INCIDENT_MIN_S: 5,         // duración mínima de un incidente
   INCIDENT_MAX_S: 20,        // duración máxima de un incidente
   INCIDENT_MAX_ACTIVE: 22,   // tope de incidentes simultáneos (evita desconectar el grafo)
