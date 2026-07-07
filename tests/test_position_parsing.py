@@ -20,9 +20,9 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-# CELL_SIZE is read at import time by the detector module; pin it so the cell math
-# in this test is deterministic regardless of the caller's environment.
-os.environ.setdefault("CELL_SIZE", "100")
+# CELL_SIZE is read at import time by the detector module; pin it (hard set, so an
+# exported value can't win) to keep the cell math deterministic regardless of env.
+os.environ["CELL_SIZE"] = "100"
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "pipeline"))
 

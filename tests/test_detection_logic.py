@@ -16,6 +16,11 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
+# Hermetic: the expected cells below assume the default 100-unit grid. Pin
+# CELL_SIZE before importing the detector so an exported value (e.g. from the
+# Makefile's .env profile) can't shift the fixtures into a different cell.
+os.environ["CELL_SIZE"] = "100"
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "pipeline"))
 
 from pyspark.sql import SparkSession
