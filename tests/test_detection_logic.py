@@ -16,7 +16,7 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "analytics"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "pipeline"))
 
 from pyspark.sql import SparkSession
 

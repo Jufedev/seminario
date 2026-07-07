@@ -1,30 +1,48 @@
-# Development workflow for the metaverse real-time analytics pipeline.
-# Everything runs inside the distrobox (no Docker required): Kafka runs
-# natively via scripts/kafka-local.sh, Python components in the local venv.
+# Single entry point for the whole project. Everything runs inside the
+# "seminario" distrobox (the host stays bare): native Kafka, PySpark in a
+# local venv, and the Three.js metaverse via bun.
+#
+# One codebase, two environments — selected by which profile you copy to .env:
+#   cp env/env.dev.example  .env     # local distrobox (native Kafka, local Spark)
+#   cp env/env.prod.example .env     # Azure (Event Hubs + Databricks)
+# The detector and the metaverse read the same KAFKA_BOOTSTRAP / EVENTHUBS_*
+# variables, so switching environments never changes code.
+
+# Load the active environment profile (if present) and export it to every recipe.
+-include .env
+export
 
 VENV := .venv
 PYTHON := $(VENV)/bin/python
 PIP := $(VENV)/bin/pip
 KAFKA := ./scripts/kafka-local.sh
 TOPIC ?= red-points
+CELL_SIZE ?= 75
 
 .DEFAULT_GOAL := help
 
-.PHONY: help setup test kafka-install kafka-start kafka-stop kafka-status \
-        kafka-logs consume detector consumer producer bridge pipeline-check \
-        metaverse-install metaverse clean docker-up docker-down
+.PHONY: help box setup test \
+        kafka-install kafka-start kafka-stop kafka-status kafka-logs consume \
+        detector \
+        metaverse-install metaverse-test metaverse-server metaverse-web \
+        infra-init infra-plan infra-apply \
+        docker-kafka-up docker-kafka-down clean
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
-		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
+		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
 
-# --- Environment ------------------------------------------------------------
+# --- Environment (dev) ------------------------------------------------------
 
-setup: ## Create venv and install Python dependencies (first time)
+box: ## (run on the HOST) Create the distrobox from distrobox.ini
+	distrobox assemble create --file distrobox.ini
+	@echo "Now: distrobox enter seminario"
+
+setup: ## Create the Python venv and install detector deps (pyspark)
 	test -d $(VENV) || python3 -m venv $(VENV)
 	$(PIP) install -r requirements.txt
 
-# --- Kafka (native, no Docker) ----------------------------------------------
+# --- Kafka (dev, native — no Docker) ----------------------------------------
 
 kafka-install: ## Download Kafka and format KRaft storage (first time)
 	$(KAFKA) install
@@ -44,46 +62,49 @@ kafka-logs: ## Tail the broker log
 consume: ## Tail a topic from the console (TOPIC=red-points by default)
 	$(KAFKA) consume $(TOPIC)
 
-# --- Pipeline components (one terminal each) ---------------------------------
+# --- Big Data pipeline (the detector of record) -----------------------------
 
-test: ## Run the detection logic test (no Kafka needed)
+test: ## Run the Python detector tests (detection logic + JS→Spark parsing seam; no Kafka needed)
 	$(PYTHON) tests/test_detection_logic.py
+	$(PYTHON) tests/test_position_parsing.py
 
-# Default grid size matches the metaverse map (see docs/integration-contract.md);
-# override for the legacy 0-1000 simulator plane: CELL_SIZE=100 make detector
-CELL_SIZE ?= 38
+detector: ## Run the Spark red-point detector (reads .env for broker + CELL_SIZE)
+	CELL_SIZE=$(CELL_SIZE) $(PYTHON) pipeline/red_point_detector.py
 
-detector: ## Run the Spark red-point detector
-	CELL_SIZE=$(CELL_SIZE) $(PYTHON) analytics/red_point_detector.py
+# --- Metaverse (data source + renderer, via bun) ----------------------------
 
-consumer: ## Run the red-points consumer (simulated backend)
-	$(PYTHON) simulator/consumer.py
+metaverse-install: ## Install metaverse dependencies (first time)
+	cd metaverse && bun install
 
-producer: ## Run the avatar simulator
-	$(PYTHON) simulator/producer.py
+metaverse-test: ## Run the metaverse JS tests (bun test — no Kafka needed)
+	cd metaverse && bun test
 
-bridge: ## Run the WebSocket-Kafka bridge (metaverse backend)
-	$(PYTHON) backend/bridge.py
+metaverse-server: ## Run the authoritative server (produces avatar-positions, consumes red-points)
+	cd metaverse && bun server/index.js
 
-pipeline-check: kafka-status test ## Verify broker is up and logic test passes
+metaverse-web: ## Run the browser client (Vite dev server via bun)
+	cd metaverse && bun run dev
 
-# --- Metaverse frontend (bun) --------------------------------------------------
+# --- Infrastructure (prod — Azure via Terraform) ----------------------------
 
-metaverse-install: ## Install metaverse frontend dependencies (first time)
-	cd desarrollo/ecci-metaverse && bun install
+infra-init: ## terraform init (needs ARM_SUBSCRIPTION_ID)
+	cd infra && terraform init
 
-metaverse: ## Run the metaverse dev server (Vite via bun)
-	cd desarrollo/ecci-metaverse && bun run dev
+infra-plan: ## terraform plan
+	cd infra && terraform plan
 
-# --- Docker alternative (host with Docker only) -------------------------------
+infra-apply: ## terraform apply (provisions Event Hubs + Databricks + ADLS)
+	cd infra && terraform apply
 
-docker-up: ## Start Kafka + Kafka UI + Floci via Docker Compose
-	docker compose up -d
+# --- Docker alternative for Kafka (if you prefer it over native) ------------
 
-docker-down: ## Stop the Docker Compose stack
-	docker compose down
+docker-kafka-up: ## Start Kafka via Docker Compose (alternative to native)
+	docker compose -f metaverse/docker-compose.yml up -d
 
-# --- Housekeeping -------------------------------------------------------------
+docker-kafka-down: ## Stop the Docker Kafka
+	docker compose -f metaverse/docker-compose.yml down
+
+# --- Housekeeping -----------------------------------------------------------
 
 clean: ## Remove Spark checkpoints (required when detection params change)
 	rm -rf checkpoints/

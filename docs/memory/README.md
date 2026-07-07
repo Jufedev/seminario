@@ -19,6 +19,7 @@ big-data pipeline (Kafka + Spark). Grade project, Universidad ECCI (Bogotá).
 | [05-metaverse-integration.md](05-metaverse-integration.md) | Metaverse ↔ pipeline bridge, mapping, review fixes |
 | [06-status-and-plan.md](06-status-and-plan.md) | Day-1 status review, closing plan, session summary |
 | [07-git-and-remote.md](07-git-and-remote.md) | Repository init and PDF history purge |
+| [08-v2-integration.md](08-v2-integration.md) | v2 metaverse integration, restructure, review fixes, first tests |
 
 Each entry keeps its original date and type (decision / architecture / discovery /
 bugfix / pattern) so the reasoning behind each choice stays traceable.
