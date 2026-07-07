@@ -10,13 +10,19 @@ import { Simulation } from './simulation.js'
 const MAX_USERS = 3
 const EMPTY_ROOM_TTL_MS = 60_000   // sala sin nadie durante 1 min → se destruye
 
+// Contador monótono por proceso: da a cada sala un epoch único aunque un mismo
+// código de sala se recicle tras el barrido de salas vacías. Distingue reusos en
+// el estado por ventana del detector Spark (ver avatar_id en simulation.js).
+let roomEpochSeq = 0
+
 export class Room {
   constructor(code) {
     this.code = code
+    this.epoch = (roomEpochSeq++).toString(36)   // nonce de creación (base36, corto)
     this.admin = null                        // ws del admin (o null si se desconectó)
     this.adminName = null
     this.users = [null, null, null]          // índice 0..2 = Usuario 1..3 {ws, name}
-    this.sim = new Simulation(code)
+    this.sim = new Simulation(code, this.epoch)
     this.lastRun = this.sim.run
     this.emptySince = Date.now()
   }

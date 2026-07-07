@@ -164,6 +164,13 @@ export function setEdgePenalty(aId, bId, penalty, state = DEFAULT_EDGE_STATE) {
   else state.penalty.delete(key)
 }
 
+// Penalización actual de una arista (0 si ninguna). Las zonas rojas de Spark se
+// modelan como penalización (no bloqueo): el vehículo aún puede pasar pero el
+// tramo "pesa" más. Consulta usada por las ETAs de la decisión de 5s.
+export function edgePenalty(aId, bId, state = DEFAULT_EDGE_STATE) {
+  return state.penalty.get(edgeKey(aId, bId)) || 0
+}
+
 // Limpia bloqueos y penalizaciones de un estado. El DEFAULT es compartido por las
 // vistas offline: si una simulación termina con un incidente activo y el usuario
 // navega fuera antes de que expire, quedaría "pegado" para la siguiente. Se llama

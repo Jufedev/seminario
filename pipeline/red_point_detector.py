@@ -7,8 +7,8 @@ enough avatars stay stopped in the same zone.
 Runs unchanged against local Kafka and Azure Event Hubs (Kafka endpoint):
 set EVENTHUBS_CONNECTION_STRING to switch to Azure.
 
-Input  topic (avatar-positions): {"avatar_id","x","y","speed","ts"}
-Output topic (red-points):       {"cell_x","cell_y","center_x","center_y",
+Input  topic (avatar-positions): {"avatar_id","x","y","speed","ts","room"}
+Output topic (red-points):       {"room","cell_x","cell_y","center_x","center_y",
                                   "stationary_avatars","window_start","window_end"}
 """
 
@@ -22,6 +22,11 @@ KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP", "localhost:9092")
 INPUT_TOPIC = os.getenv("INPUT_TOPIC", "avatar-positions")
 OUTPUT_TOPIC = os.getenv("OUTPUT_TOPIC", "red-points")
 CHECKPOINT_DIR = os.getenv("CHECKPOINT_DIR", "./checkpoints/red-point-detector")
+
+# Optional historical archiving (thesis: ADLS archiving). When set, the parsed
+# avatar-positions feed is appended to Parquet at this path. Local dir in dev
+# (e.g. ./archive), abfss://... ADLS path in prod. Empty -> archiving disabled.
+ARCHIVE_PATH = os.getenv("ARCHIVE_PATH", "")
 
 # Detection parameters — these are the tunable knobs of the hypothesis:
 # a red point = at least MIN_STATIONARY_AVATARS with speed below
@@ -44,6 +49,7 @@ POSITION_SCHEMA = StructType(
         StructField("y", DoubleType(), nullable=False),
         StructField("speed", DoubleType(), nullable=False),
         StructField("ts", StringType(), nullable=False),  # ISO-8601
+        StructField("room", StringType(), nullable=True),  # room code from bridge envelope
     ]
 )
 
@@ -83,9 +89,12 @@ def parse_positions(raw):
 def detect_red_points(positions):
     """Core detection: stationary avatars grouped by map cell in a sliding window.
 
-    Takes a DataFrame with (avatar_id, x, y, speed, event_time) and returns
-    one row per (window, cell) where at least MIN_STATIONARY_AVATARS distinct
-    avatars were below SPEED_THRESHOLD. Works on both streaming and batch
+    Takes a DataFrame with (avatar_id, x, y, speed, event_time, room) and
+    returns one row per (window, room, cell) where at least
+    MIN_STATIONARY_AVATARS distinct avatars were below SPEED_THRESHOLD.
+    Grouping by room keeps simultaneous rooms from pooling their congestion;
+    a null room (legacy messages) forms one group. Works on both streaming and
+    batch
     DataFrames (the watermark is ignored in batch), which is what makes the
     logic unit-testable without Kafka.
     """
@@ -94,6 +103,7 @@ def detect_red_points(positions):
         .withWatermark("event_time", WATERMARK_DELAY)
         .groupBy(
             F.window("event_time", WINDOW_DURATION, WINDOW_SLIDE).alias("w"),
+            F.col("room"),
             F.floor(F.col("x") / CELL_SIZE).alias("cell_x"),
             F.floor(F.col("y") / CELL_SIZE).alias("cell_y"),
         )
@@ -125,9 +135,12 @@ def main() -> None:
         .load()
     )
 
-    red_points = detect_red_points(parse_positions(raw)).select(
+    parsed = parse_positions(raw)
+
+    red_points = detect_red_points(parsed).select(
         F.to_json(
             F.struct(
+                F.col("room"),
                 F.col("cell_x"),
                 F.col("cell_y"),
                 ((F.col("cell_x") + 0.5) * CELL_SIZE).alias("center_x"),
@@ -137,7 +150,7 @@ def main() -> None:
                 F.col("w.end").cast("string").alias("window_end"),
             )
         ).alias("value"),
-        F.concat_ws("_", F.col("cell_x"), F.col("cell_y")).alias("key"),
+        F.concat_ws("_", F.col("room"), F.col("cell_x"), F.col("cell_y")).alias("key"),
     )
 
     # "update" mode emits a red point as soon as the threshold is crossed
@@ -157,7 +170,29 @@ def main() -> None:
         f"(cell={CELL_SIZE}, min_avatars={MIN_STATIONARY_AVATARS}, "
         f"window={WINDOW_DURATION}, slide={WINDOW_SLIDE})"
     )
-    query.awaitTermination()
+
+    # Optional historical archiving: append the raw parsed positions feed to
+    # Parquet (local dir in dev, abfss:// ADLS path in prod). Env-driven, so the
+    # same code archives locally or to ADLS with no change. Disabled when empty.
+    if ARCHIVE_PATH:
+        archive_checkpoint = os.getenv(
+            "ARCHIVE_CHECKPOINT_DIR", CHECKPOINT_DIR + "-archive"
+        )
+        (
+            parsed.writeStream.format("parquet")
+            .option("path", ARCHIVE_PATH)
+            .option("checkpointLocation", archive_checkpoint)
+            .outputMode("append")
+            .start()
+        )
+        print(f"Historical archiving: ON -> {ARCHIVE_PATH} (checkpoint {archive_checkpoint})")
+    else:
+        print("Historical archiving: OFF (set ARCHIVE_PATH to enable)")
+
+    # Both streams run concurrently; block until either terminates instead of
+    # awaiting only the red-points query (which would leave the archive stream
+    # unwaited).
+    spark.streams.awaitAnyTermination()
 
 
 if __name__ == "__main__":

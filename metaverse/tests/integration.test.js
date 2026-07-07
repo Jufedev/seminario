@@ -57,32 +57,46 @@ describe('zoneIndexAt (coords de mundo → celda del overlay 6×6)', () => {
   })
 })
 
-describe('RedPointStore (red-points de Spark → zonas activas)', () => {
+describe('RedPointStore (red-points de Spark → zonas activas por sala)', () => {
   const fakeBridge = () => ({ mode: 'local', emitter: new EventEmitter() })
-  const sparkRedPoint = (cx, cy) => ({
+  const sparkRedPoint = (cx, cy, room) => ({
+    room,
     cell_x: 1, cell_y: 1, center_x: cx, center_y: cy,
     stationary_avatars: 7,
     window_start: '2026-07-07 12:00:00', window_end: '2026-07-07 12:01:00',
   })
 
-  test('un red-point bien formado activa su zona', () => {
+  test('un red-point bien formado activa su zona en su sala', () => {
     const store = new RedPointStore({ bridge: fakeBridge() })
-    store._ingest(sparkRedPoint(0, 0))
-    expect(store.activeZones()).toContain(zoneIndexAt(0, 0))
+    store._ingest(sparkRedPoint(0, 0, 'ECCI-1234'))
+    expect(store.activeZonesFor('ECCI-1234')).toContain(zoneIndexAt(0, 0))
+  })
+
+  test('las zonas son POR sala: otra sala no ve las de una sala ajena', () => {
+    const store = new RedPointStore({ bridge: fakeBridge() })
+    store._ingest(sparkRedPoint(0, 0, 'ECCI-1234'))
+    expect(store.activeZonesFor('ECCI-9999')).toHaveLength(0)
+  })
+
+  test('un red-point sin sala cae en GLOBAL y lo ven todas las salas', () => {
+    const store = new RedPointStore({ bridge: fakeBridge() })
+    store._ingest(sparkRedPoint(0, 0)) // sin room
+    expect(store.activeZonesFor('ECCI-1234')).toContain(zoneIndexAt(0, 0))
+    expect(store.activeZonesFor('ECCI-9999')).toContain(zoneIndexAt(0, 0))
   })
 
   test('un campo center renombrado NO produce zona (guarda contra renombre silencioso)', () => {
     const store = new RedPointStore({ bridge: fakeBridge() })
-    store._ingest({ cell_x: 1, cell_y: 1, centerX: 0, centerY: 0, stationary_avatars: 7 })
-    expect(store.activeZones()).toHaveLength(0)
+    store._ingest({ room: 'ECCI-1234', cell_x: 1, cell_y: 1, centerX: 0, centerY: 0, stationary_avatars: 7 })
+    expect(store.activeZonesFor('ECCI-1234')).toHaveLength(0)
   })
 
-  test('una zona expirada se poda de activeZones y del mapa', () => {
+  test('una zona expirada se poda de activeZonesFor y del mapa de la sala', () => {
     const store = new RedPointStore({ bridge: fakeBridge() })
-    store._ingest(sparkRedPoint(0, 0))
+    store._ingest(sparkRedPoint(0, 0, 'ECCI-1234'))
     const zone = zoneIndexAt(0, 0)
-    store.zones.set(zone, Date.now() - 1) // forzar expiración
-    expect(store.activeZones()).not.toContain(zone)
-    expect(store.zones.has(zone)).toBe(false)
+    store.zones.get('ECCI-1234').set(zone, Date.now() - 1) // forzar expiración
+    expect(store.activeZonesFor('ECCI-1234')).not.toContain(zone)
+    expect(store.zones.has('ECCI-1234')).toBe(false) // sala sin zonas vivas → se descarta
   })
 })

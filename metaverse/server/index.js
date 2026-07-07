@@ -127,12 +127,10 @@ setInterval(() => {
   const now = performance.now()
   const dt = Math.min((now - last) / 1000, 0.1)
   last = now
-  // Zonas rojas de Spark (globales, con TTL): el mapa físico es uno y las salas
-  // lo comparten, así que las mismas zonas aplican a todas (ver redPoints.js).
-  const sparkRedZones = redStore.activeZones()
   for (const room of rooms.all()) {
     bridge.setContext(room.code)   // los eventos del step llevan la sala correcta
-    room.sim.applySparkRedZones(sparkRedZones)   // overlay + reruteo desde Spark, no ZoneSystem
+    // Zonas rojas de Spark POR SALA (con TTL): las propias de la sala + las globales.
+    room.sim.applySparkRedZones(redStore.activeZonesFor(room.code))   // overlay + reruteo desde Spark, no ZoneSystem
     room.sim.step(dt)
     if (room.sim.run !== room.lastRun) {       // corrida nueva de ESTA sala
       room.lastRun = room.sim.run
@@ -159,7 +157,10 @@ setInterval(() => {
   for (const room of rooms.all()) {
     if (room.admin) {
       const metrics = analytics.metricsForAdmin(room.code)
-      if (metrics) send(room.admin, { type: 'admin_analytics', ...metrics })
+      // Zonas rojas del detector Spark para el heatmap del admin (la detección
+      // interna de ZoneSystem está desconectada: Spark es el detector de registro).
+      const sparkRedZones = redStore.activeZonesFor(room.code)
+      if (metrics) send(room.admin, { type: 'admin_analytics', ...metrics, sparkRedZones })
     }
     for (let slot = 1; slot <= 3; slot++) {
       const u = room.users[slot - 1]
@@ -169,6 +170,12 @@ setInterval(() => {
     }
   }
 }, ANALYTICS_EMIT_MS)
+
+// ── Latido de observabilidad (~30s): una línea con los contadores vivos, para
+//    ver de un vistazo si el flujo Kafka sigue moviéndose (o se congeló en silencio).
+setInterval(() => {
+  console.log(`[heartbeat] kafka:${bridge.mode} · publicados:${bridge.published} · redpoints:${redStore.consumed} · analytics:${analytics.consumed}`)
+}, 30_000)
 
 // ── Cierre limpio: desconecta productor/consumidores para que los grupos hagan
 //    LeaveGroup y el rebalanceo del próximo arranque sea inmediato (no espera al

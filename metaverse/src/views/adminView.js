@@ -162,7 +162,7 @@ export function renderAdminView(app) {
   view.querySelector('#dash-toggle').addEventListener('click', () => dashPanel.classList.toggle('hidden'))
   view.querySelector('#dash-close').addEventListener('click', () => dashPanel.classList.add('hidden'))
 
-  function drawHeatmap(zones) {
+  function drawHeatmap(zones, redFlags) {
     const canvas = view.querySelector('#d-heatmap')
     const ctx = canvas.getContext('2d')
     const w = canvas.clientWidth, h = canvas.clientHeight
@@ -175,7 +175,8 @@ export function renderAdminView(app) {
       ctx.fillStyle = `rgb(${r},${gg},${b})`
       const x = (i % g) * cw, y = Math.floor(i / g) * ch
       ctx.fillRect(x + 1, y + 1, cw - 2, ch - 2)
-      if (zones.red[i]) { ctx.strokeStyle = '#f87171'; ctx.lineWidth = 2; ctx.strokeRect(x + 1, y + 1, cw - 2, ch - 2) }
+      // Borde rojo desde el detector Spark (redFlags), NO desde el ZoneSystem interno.
+      if (redFlags[i]) { ctx.strokeStyle = '#f87171'; ctx.lineWidth = 2; ctx.strokeRect(x + 1, y + 1, cw - 2, ch - 2) }
     }
   }
   function drawSpark(series) {
@@ -205,7 +206,10 @@ export function renderAdminView(app) {
     view.querySelector('#d-arrived').textContent = m.global.arrived
     view.querySelector('#d-speed').textContent = m.global.avgSpeed ?? '—'
     view.querySelector('#d-c').textContent = m.global.avgC ?? '—'
-    view.querySelector('#d-red').textContent = m.global.redZones
+    // Zonas rojas del detector Spark (índices de celda 6×6 activos), NO el contador
+    // muerto del ZoneSystem interno (m.global.redZones, siempre 0 con la detección off).
+    const sparkRed = m.sparkRedZones ?? []
+    view.querySelector('#d-red').textContent = sparkRed.length
     view.querySelector('#d-inc').textContent = m.global.incidentsActive
 
     const table = view.querySelector('#d-users')
@@ -231,7 +235,10 @@ export function renderAdminView(app) {
       '🥇 flota más rápida · 🧠 mejor decisor (ahorro) · 🐌 más congestión sufrida'
     view.querySelector('#d-critical').textContent = m.critical
       ? `crítica: ${m.critical.label} (C̄ ${m.critical.avgC})` : 'crítica: —'
-    drawHeatmap(m.zones)
+    // Bordes rojos del heatmap desde las zonas rojas de Spark (no las del ZoneSystem).
+    const redFlags = new Array(m.zones.C.length).fill(0)
+    for (const z of sparkRed) if (z >= 0 && z < redFlags.length) redFlags[z] = 1
+    drawHeatmap(m.zones, redFlags)
     drawSpark(m.series)
   }
 

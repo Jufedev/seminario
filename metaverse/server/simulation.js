@@ -11,7 +11,7 @@
 // ════════════════════════════════════════════════════════════════
 import {
   POINTS, NODES, pointNode, allEdges, createEdgeState, resetGraph,
-  dijkstra, isEdgeBlocked, pathLengthUnits, UNIT_TO_METERS, setEdgePenalty,
+  dijkstra, isEdgeBlocked, pathLengthUnits, UNIT_TO_METERS, setEdgePenalty, edgePenalty,
 } from './graph.js'
 import { TrafficSystem } from '../src/sim/traffic.js'
 import { AgentSystem } from '../src/sim/agents.js'
@@ -47,8 +47,11 @@ const r2 = v => Math.round(v * 100) / 100
 const r1 = v => Math.round(v * 10) / 10
 
 export class Simulation {
-  constructor(label = '') {
+  constructor(label = '', epoch = '') {
     this.label = label ? ` ${label}` : ''
+    // Nonce de creación de la sala: distingue reusos de un mismo código de sala
+    // (tras el barrido de salas vacías) en el estado por ventana del detector Spark.
+    this.epoch = String(epoch)
     this.run = 1          // incrementa en cada reset (los clientes vacían su buffer al verlo cambiar)
     this.tick = 0
     this.time = 0
@@ -196,8 +199,8 @@ export class Simulation {
     if (!altTail || altTail.length < 2) return                            // sin alternativa: nada que decidir
 
     const speed = SIM_CONFIG.AGENT_SPEED * as.speedFactor[i]
-    // ETA actual = terminar la ruta de siempre + esperar a que el bloqueo se libere
-    const currentEta = as.remainingDistanceUnits(i) / speed + this._blockRemaining(i, blockA, blockB)
+    // ETA actual = terminar la ruta de siempre + costo del bloqueo/zona roja en la vía
+    const currentEta = as.remainingDistanceUnits(i) / speed + this._blockRemaining(i, speed, blockA, blockB)
     // ETA alternativa = llegar al nodo de adelante + recorrer la ruta nueva
     const a0 = NODES[path[as.segIndex[i]]], b0 = NODES[fromNode]
     const toNode = Math.max(0, Math.hypot(a0.x - b0.x, a0.z - b0.z) - as.segDist[i])
@@ -213,21 +216,33 @@ export class Simulation {
     console.log(`[sim${this.label}] oferta al Usuario ${slot} (veh ${i}): seguir ~${currentEta.toFixed(0)}s vs alterna ~${altEta.toFixed(0)}s`)
   }
 
-  // Tiempo restante estimado del bloqueo que afecta la ruta del vehículo `i`
-  _blockRemaining(i, blockA, blockB) {
+  // Costo (segundos) que el bloqueo/zona roja en la ruta del vehículo `i` añade a
+  // su ETA "seguir". `speed` (unidades/s) convierte la penalización de zona roja a
+  // segundos de demora, ya que una zona roja de Spark no bloquea: penaliza la vía.
+  _blockRemaining(i, speed, blockA, blockB) {
     let edge = blockA && blockB ? { a: blockA, b: blockB } : null
     if (!edge) {
+      // Detecta el primer tramo problemático de la ruta restante: bloqueado por un
+      // incidente O penalizado por una zona roja de Spark (Map de penalización).
       const as = this.agents, path = as.pathNodes[i]
       for (let k = as.segIndex[i]; k < path.length - 1; k++) {
-        if (isEdgeBlocked(path[k], path[k + 1], this.graphState)) { edge = { a: path[k], b: path[k + 1] }; break }
+        if (isEdgeBlocked(path[k], path[k + 1], this.graphState) ||
+            edgePenalty(path[k], path[k + 1], this.graphState) > 0) {
+          edge = { a: path[k], b: path[k + 1] }; break
+        }
       }
     }
     if (edge) {
+      // Incidente real → esperar a que se libere (tiempo restante del bloqueo).
       const inc = this.incidents.active.find(x =>
         (x.edge.a === edge.a && x.edge.b === edge.b) || (x.edge.a === edge.b && x.edge.b === edge.a))
       if (inc) return Math.max(0, inc.start + inc.duration - this.time)
+      // Zona roja de Spark (penalización, sin incidente): la demora estimada es la
+      // penalización de la vía traducida a segundos al ritmo del vehículo.
+      const pen = edgePenalty(edge.a, edge.b, this.graphState)
+      if (pen > 0 && speed > 0) return pen / speed
     }
-    return 8   // sin incidente identificable (p.ej. atasco puro): espera nominal
+    return 8   // sin bloqueo ni zona roja identificable (p.ej. atasco puro): espera nominal
   }
 
   // choice: 'keep' | 'alternative' · source: 'usuario' | 'timeout'
@@ -377,9 +392,10 @@ export class Simulation {
       this._lastEmitTime[i] = now
       this._emitSeen[i] = 1
       // Topic del contrato (con guion). El envelope del bridge añade room/ts,
-      // pero el payload va ÚLTIMO → su ts ISO gana. avatar_id lleva la sala.
+      // pero el payload va ÚLTIMO → su ts ISO gana. avatar_id lleva la sala + su
+      // epoch de creación → conteo de avatares distintos sin colisión al reusar código.
       batch.push({
-        avatar_id: `${roomCode}-${i}`,
+        avatar_id: this.epoch ? `${roomCode}-${this.epoch}-${i}` : `${roomCode}-${i}`,
         x: r2(x),                  // three.js posX → x
         y: r2(z),                  // three.js posZ (plano de piso) → y
         speed: +speedMps.toFixed(3),

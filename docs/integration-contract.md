@@ -59,8 +59,12 @@ aristas y recalculando rutas de los avatares en camino.
 
 Los demás topics del metaverso (`agent.spawn`, `agent.reroute`, `agent.arrived`,
 `incident.start/end`, `route.decision`, `analytics.snapshot`, …) son internos de
-la simulación y NO forman parte de este contrato. **Trabajo futuro: archivado a
-ADLS** de esos topics para análisis histórico.
+la simulación y NO forman parte de este contrato.
+
+El detector archiva de forma **opcional** el feed histórico de `avatar-positions`
+(todas las posiciones parseadas) a Parquet cuando `ARCHIVE_PATH` está definido:
+directorio local en dev (`./archive`), ruta `abfss://…` de ADLS en prod. El mismo
+código sirve para ambos entornos; con `ARCHIVE_PATH` vacío no se archiva.
 
 ## Esquemas JSON
 
@@ -70,7 +74,7 @@ Producido por el servidor (`metaverse/server/simulation.js`, muestreo por avatar
 
 ```json
 {
-  "avatar_id": "ECCI-1234-42",
+  "avatar_id": "ECCI-1234-3f-42",
   "x": -104.50,
   "y": 152.00,
   "speed": 0.12,
@@ -80,7 +84,7 @@ Producido por el servidor (`metaverse/server/simulation.js`, muestreo por avatar
 
 | Campo | Origen | Transformación |
 |---|---|---|
-| `avatar_id` | código de sala + índice de agente | `` `${room}-${agentIndex}` `` (unicidad entre salas) |
+| `avatar_id` | código de sala + epoch de la sala + índice de agente | `` `${room}-${epoch}-${agentIndex}` `` (unicidad entre salas y entre reusos de un mismo código) |
 | `x` | `posX[i]` | Sin cambio (unidades de mundo Three.js) |
 | `y` | `posZ[i]` | Plano de suelo Three.js: `z` → `y` del detector |
 | `speed` | desplazamiento medido | **`hypot(Δx,Δz)·4 / Δt`** (m/s reales entre muestras), NO la velocidad deseada |
@@ -98,10 +102,13 @@ esquema del detector.
 
 ### 2. Salida del detector: `red-points`
 
-Sin cambios respecto al detector (código intacto):
+Incluye `room`: el detector agrupa por `(room, celda)`, así que cada punto rojo
+lleva la sala en la que se detectó (null en mensajes legacy sin envelope). La
+`key` de Kafka es `room_cell_x_cell_y` para que salas distintas no colisionen:
 
 ```json
 {
+  "room": "ECCI-1234",
   "cell_x": -3, "cell_y": 2,
   "center_x": -187.50, "center_y": 150.00,
   "stationary_avatars": 7,
@@ -132,12 +139,12 @@ re-emisiones de Spark (modo `update`).
 
 ## Correlación con salas (rooms)
 
-El detector agrupa por celda de mundo sobre **todos** los avatares y descarta el
-`avatar_id`, por lo que `red-points` no lleva sala. Como todas las salas renderizan
-el **mismo mapa físico**, el `RedPointStore` modela las zonas rojas como
-**globales**: un único conjunto que reciben todas las salas. Para el escenario de
-demostración (una sala) es exacto. *Mejora posible para multi-sala:* que el
-detector parsee la sala desde `avatar_id` y agrupe por `(sala, celda)`.
+El detector agrupa por `(room, celda)`: cada sala se detecta de forma
+independiente, así que salas simultáneas no mezclan su congestión. El campo
+`room` del envelope del puente Kafka viaja en el esquema y se emite en cada
+`red-point`; mensajes legacy sin `room` (null) forman un único grupo y siguen
+funcionando. La `key` de Kafka incluye la sala (`room_cell_x_cell_y`) para que
+los puntos rojos por sala se particionen distinto.
 
 ## Regla de cadencia
 
@@ -157,6 +164,7 @@ detector parsee la sala desde `avatar_id` y agrupe por `(sala, celda)`.
 | Detector | `SPEED_THRESHOLD` | `0.5` | Velocidad (m/s) bajo la cual un avatar cuenta como detenido |
 | Detector | `MIN_STATIONARY_AVATARS` | `5` | Avatares detenidos para declarar punto rojo |
 | Detector | `WINDOW_DURATION` / `WINDOW_SLIDE` | `60s` / `10s` | Ventana deslizante |
+| Detector | `ARCHIVE_PATH` | (vacío) | Si se define → archiva `avatar-positions` parseado a Parquet (dir local en dev, `abfss://…` ADLS en prod); vacío = desactivado |
 
 Los perfiles listos están en `env/env.dev.example` y `env/env.prod.example`
 (`cp env/env.dev.example .env`); el `Makefile` los carga con `-include .env`.
@@ -178,7 +186,12 @@ Los perfiles listos están en `env/env.dev.example` y `env/env.prod.example`
 
 ## Trabajo futuro
 
-- Archivado a ADLS de los demás topics del metaverso para análisis histórico.
-- Detección por sala (agrupar por `(sala, celda)` en el detector).
 - Re-alimentar el heatmap del panel de administración desde `red-points` (hoy el
   heatmap interno quedó en 0 al desconectar `zones.update`).
+
+### Hecho
+
+- ✅ **Detección por sala**: el detector agrupa por `(room, celda)` y `red-points`
+  lleva `room` (salas simultáneas ya no mezclan congestión).
+- ✅ **Archivado a ADLS**: escritura opcional del feed histórico de
+  `avatar-positions` a Parquet vía `ARCHIVE_PATH` (dir local en dev, ADLS en prod).

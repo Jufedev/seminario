@@ -6,11 +6,11 @@
 //  celda al índice de zona 6×6 del metaverso y mantiene el conjunto de
 //  zonas rojas ACTIVAS con TTL.
 //
-//  Correlación de sala: la salida de Spark agrupa por CELDA de mundo
-//  sobre TODOS los avatares (avatar_id = "<sala>-<id>"), y el red-point
-//  no lleva la sala. El mapa físico es UNO solo y compartido por todas
-//  las salas, así que las zonas rojas son GLOBALES: se aplican a todas
-//  las salas por igual. (Ver INTEGRATION REPORT / server/index.js.)
+//  Correlación de sala: Spark ahora emite cada red-point con un campo
+//  `room` (el código de sala parseado del avatar_id). Las zonas rojas se
+//  mantienen POR SALA. Un red-point sin `room` cae en una clave GLOBAL y
+//  se aplica a todas las salas (compat + detecciones sin sala atribuible).
+//  (Ver server/index.js: el tick pasa activeZonesFor(room.code) a cada sala.)
 //
 //  Modo local (sin broker → sin Spark): el store queda vacío. No hay
 //  detección interna de respaldo a propósito: Spark es el detector de
@@ -27,10 +27,15 @@ export const RED_POINTS_TOPIC = 'red-points'
 // una zona que ya no se re-emite.
 const TTL_MS = 30_000
 
+// Clave para red-points sin sala atribuible: sus zonas las ven TODAS las salas.
+export const GLOBAL_ROOM_KEY = '__global__'
+
 export class RedPointStore {
   constructor({ bridge } = {}) {
     this.bridge = bridge
-    this.zones = new Map()   // índice de zona 6×6 → epoch ms de expiración (global a todas las salas)
+    // Zonas rojas POR SALA: roomKey → Map<índice de zona 6×6, epoch ms de expiración>.
+    // La clave GLOBAL_ROOM_KEY agrupa los red-points sin sala (los ven todas).
+    this.zones = new Map()
     this.mode = 'local'
     this.consumed = 0
   }
@@ -47,6 +52,11 @@ export class RedPointStore {
         // en el último offset y no revive detecciones obsoletas.
         const groupId = `ecci-redpoints-${process.pid}-${Date.now()}`
         this.consumer = client.consumer({ groupId })
+        // Un fallo del broker DESPUÉS del arranque (rebalanceo fallido, broker caído)
+        // dispara CRASH: sin este listener el consumidor moriría en silencio y las
+        // zonas rojas quedarían congeladas sin señal. Lo dejamos visible en el log.
+        this.consumer.on(this.consumer.events.CRASH, e =>
+          console.error('[redpoints] CRASH del consumidor Kafka:', e.payload?.error?.message ?? e.payload?.error, '— zonas rojas pueden quedar congeladas'))
         await this.consumer.connect()
         await this.consumer.subscribe({ topic: RED_POINTS_TOPIC, fromBeginning: false })
         await this.consumer.run({
@@ -82,7 +92,7 @@ export class RedPointStore {
     console.log('[redpoints] modo local (sin Spark: no habrá zonas rojas hasta conectar el detector)')
   }
 
-  // Un red-point de Spark → refresca el TTL de su zona 6×6.
+  // Un red-point de Spark → refresca el TTL de su zona 6×6 bajo la sala del evento.
   _ingest(e) {
     this.consumed++
     // Spark emite center_x/center_y en las MISMAS coords de mundo que le
@@ -91,18 +101,39 @@ export class RedPointStore {
     const cx = Number(e.center_x), cy = Number(e.center_y)
     if (!Number.isFinite(cx) || !Number.isFinite(cy)) return
     const zone = zoneIndexAt(cx, cy)
-    this.zones.set(zone, Date.now() + TTL_MS)
+    const key = e.room ?? GLOBAL_ROOM_KEY   // sin sala → clave global (la ven todas)
+    let roomZones = this.zones.get(key)
+    if (!roomZones) { roomZones = new Map(); this.zones.set(key, roomZones) }
+    roomZones.set(zone, Date.now() + TTL_MS)
   }
 
-  // Zonas rojas activas ahora (poda las expiradas). Global a todas las salas.
+  // Poda las zonas expiradas de un mapa de sala y devuelve las vivas en `out`.
+  _collectLive(key, out, now) {
+    const roomZones = this.zones.get(key)
+    if (!roomZones) return
+    for (const [zone, exp] of roomZones) {
+      if (exp > now) out.add(zone)
+      else roomZones.delete(zone)
+    }
+    if (roomZones.size === 0) this.zones.delete(key)   // no acumular salas muertas
+  }
+
+  // Zonas rojas activas de UNA sala: las suyas + las GLOBALES (poda expiradas).
+  activeZonesFor(roomCode) {
+    const now = Date.now()
+    const out = new Set()
+    if (roomCode != null) this._collectLive(roomCode, out, now)
+    this._collectLive(GLOBAL_ROOM_KEY, out, now)
+    return [...out]
+  }
+
+  // Legacy: unión de zonas activas de TODAS las salas (poda expiradas). Se mantiene
+  // por compatibilidad; el tick usa activeZonesFor(room.code) por sala.
   activeZones() {
     const now = Date.now()
-    const out = []
-    for (const [zone, exp] of this.zones) {
-      if (exp > now) out.push(zone)
-      else this.zones.delete(zone)
-    }
-    return out
+    const out = new Set()
+    for (const key of [...this.zones.keys()]) this._collectLive(key, out, now)
+    return [...out]
   }
 
   async dispose() {

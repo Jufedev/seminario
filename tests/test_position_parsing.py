@@ -54,6 +54,7 @@ def raw_value_rows():
                 "y": 152.0,
                 "speed": 0.1,
                 "ts": iso_z(BASE_TIME + timedelta(seconds=10 * sample)),
+                "room": "ECCI-1234",  # injected by the Node bridge envelope
             }
             rows.append((json.dumps(event),))
     return rows

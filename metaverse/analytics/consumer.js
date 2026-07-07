@@ -61,6 +61,10 @@ export class AnalyticsConsumer {
       try {
         const client = new Kafka({ ...kafkaConfig('ecci-analytics'), logLevel: logLevel.NOTHING })
         this.consumer = client.consumer({ groupId: 'ecci-analytics' })
+        // Un fallo del broker DESPUÉS del arranque dispara CRASH; sin este listener
+        // el consumidor moriría en silencio y la analítica dejaría de agregar sin señal.
+        this.consumer.on(this.consumer.events.CRASH, e =>
+          console.error('[analytics] CRASH del consumidor Kafka:', e.payload?.error?.message ?? e.payload?.error, '— la analítica puede quedar detenida'))
         await this.consumer.connect()
         for (const topic of TOPICS) await this.consumer.subscribe({ topic })
         await this.consumer.run({

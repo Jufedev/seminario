@@ -24,6 +24,7 @@ os.environ["CELL_SIZE"] = "100"
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "pipeline"))
 
 from pyspark.sql import SparkSession
+from pyspark.sql import functions as F
 
 from red_point_detector import detect_red_points
 
@@ -68,6 +69,9 @@ def main() -> None:
     positions = spark.createDataFrame(
         rows, schema="avatar_id string, x double, y double, speed double, event_time timestamp"
     )
+    # detect_red_points now groups by room; a single constant room leaves the
+    # cell grouping unchanged, so the flagged-cell assertions below still hold.
+    positions = positions.withColumn("room", F.lit("ECCI-TEST"))
 
     result = detect_red_points(positions).collect()
     flagged_cells = {(r["cell_x"], r["cell_y"]) for r in result}
