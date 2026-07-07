@@ -66,10 +66,30 @@ First automated JS tests added (`metaverse/tests/integration.test.js`, `bun test
 `to_timestamp` seam. Verified: `bun test` 11/11, `bun build` server OK, `vite
 build` OK, `py_compile` OK. The Spark tests need the distrobox (Java) to run.
 
-**Deferred (documented):** per-room detection (red zones are global — fine for a
-single-room demo), admin heatmap reads 0 (internal analytics disconnected),
-avatar_id room-epoch nonce, observability heartbeat, Spark-reroute personal
-vehicle ETA fallback, ADLS archiving.
+## Deferred items — completed
+*bugfix · 2026-07-07*
+
+The items deferred right after the integration were then finished and verified
+against real Spark + Kafka in the distrobox:
+
+- **Per-room detection**: the detector groups by `(room, cell)` and `red-points`
+  carries `room`; the metaverse applies red zones per room, so simultaneous rooms
+  no longer pool their congestion.
+- **ADLS / historical archiving**: an optional second Spark write stream appends
+  parsed `avatar-positions` to Parquet when `ARCHIVE_PATH` is set (local dir in
+  dev, `abfss://…` ADLS in prod).
+- **avatar_id epoch nonce**: `${room}-${epoch}-${i}` survives room-code reuse.
+- **Observability**: 30 s heartbeat of the Kafka counters + consumer `CRASH`
+  listeners.
+- **Reroute ETA**: the personal-vehicle offer reports a penalty-based ETA instead
+  of the hardcoded fallback.
+- **Admin heatmap**: renders the Spark-detected red zones (internal detection
+  stays disconnected).
+
+**Still open — external blocker:** the Azure phase (activate the subscription,
+`terraform apply`, Databricks, cloud E2E) depends on the user activating an Azure
+subscription. And the full browser E2E (avatars → painted zone → reroute) is the
+user's manual verification step.
 
 **Env note:** the `seminario` distrobox does not exist on the current host; run
 `distrobox assemble create --file distrobox.ini` before running anything.
