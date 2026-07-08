@@ -16,10 +16,15 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
-# Hermetic: the expected cells below assume the default 100-unit grid. Pin
-# CELL_SIZE before importing the detector so an exported value (e.g. from the
-# Makefile's .env profile) can't shift the fixtures into a different cell.
+# Hermetic: the expected cells below assume the default 100-unit grid anchored
+# at 0. Pin every grid variable before importing the detector so exported
+# values (e.g. from the Makefile's .env profile) can't shift the fixtures
+# into a different cell.
 os.environ["CELL_SIZE"] = "100"
+os.environ["CELL_SIZE_X"] = "100"
+os.environ["CELL_SIZE_Y"] = "100"
+os.environ["GRID_ORIGIN_X"] = "0"
+os.environ["GRID_ORIGIN_Y"] = "0"
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "pipeline"))
 
@@ -91,6 +96,28 @@ def main() -> None:
     print("OK — detection logic behaves as expected:")
     print(f"  flagged cells: {sorted(flagged_cells)}")
     print(f"  windows emitted for cell (5,5): {sum(1 for r in result if (r['cell_x'], r['cell_y']) == (5, 5))}")
+
+    # Metaverse-aligned grid (60x60 cells anchored mid-block at (-240,-195),
+    # matching metaverse/src/analytics/config.js): a stopped queue on a street
+    # must land whole in the cell that street runs through. At (x=-100, y=-15):
+    # cell_x = floor((-100+240)/60) = 2, cell_y = floor((-15+195)/60) = 3.
+    # Grids anchored on the streets themselves split the queue's two lanes
+    # into different cells (red zones lighting up next to the congestion
+    # instead of on it).
+    queue_rows = make_samples("queue", count=6, x=-100.0, y=-15.0, speed=0.0)
+    queue = spark.createDataFrame(
+        queue_rows, schema="avatar_id string, x double, y double, speed double, event_time timestamp"
+    ).withColumn("room", F.lit("ECCI-TEST"))
+    aligned = detect_red_points(
+        queue, cell_size_x=60.0, cell_size_y=60.0, grid_origin_x=-240.0, grid_origin_y=-195.0
+    ).collect()
+    aligned_cells = {(r["cell_x"], r["cell_y"]) for r in aligned}
+    assert aligned_cells == {(2, 3)}, (
+        f"Expected the stopped queue at (-100,-15) to flag exactly cell (2,3) "
+        f"on the metaverse-aligned grid, got {aligned_cells}"
+    )
+    print("OK — metaverse-aligned grid flags the congested row itself:")
+    print(f"  flagged cells: {sorted(aligned_cells)}")
 
     spark.stop()
 

@@ -6,8 +6,9 @@ import { ANALYTICS_CONFIG as CFG } from './config.js'
 
 // ════════════════════════════════════════════════════════════════
 //  ANALÍTICA POR ZONAS — el corazón del BigData del proyecto.
-//  El mapa se divide en una cuadrícula GRID_SIZE×GRID_SIZE. Cada
-//  ~1s (ventana, NO cada frame) se recalcula por zona:
+//  El mapa se divide en una cuadrícula GRID_COLS×GRID_ROWS anclada a
+//  mitad de manzana (ver config.js). Cada ~1s (ventana, NO cada
+//  frame) se recalcula por zona:
 //
 //   ρ (densidad)        = avatares_en_zona / capacidad_zona        (capacidad = nAristas · factor)
 //   incidentes          = incidentes_en_zona / nAristas_zona
@@ -29,7 +30,7 @@ export class ZoneSystem {
     this.graphState = graphState
 
     this.cfg = CFG   // expuesto para lectura/depuración en vivo (window.__DEBUG_SIM.zoneSystem.cfg)
-    const n = CFG.GRID_SIZE * CFG.GRID_SIZE
+    const n = CFG.GRID_COLS * CFG.GRID_ROWS
     this.n = n
     this.C = new Float32Array(n)
     this.density = new Float32Array(n)
@@ -50,13 +51,14 @@ export class ZoneSystem {
   }
 
   // ── Índice de zona a partir de coordenadas de mundo (x,z) ──
+  // Grilla anclada a mitad de manzana: ninguna vía cae sobre un borde de celda
+  // (misma fórmula que server/zoneGrid.js — mantener en espejo).
   zoneIndexAt(x, z) {
-    const { xMin, xMax, zMin, zMax } = MAP_BOUNDS
-    const cw = (xMax - xMin) / CFG.GRID_SIZE, ch = (zMax - zMin) / CFG.GRID_SIZE
-    let zx = Math.floor((x - xMin) / cw), zz = Math.floor((z - zMin) / ch)
-    zx = Math.max(0, Math.min(CFG.GRID_SIZE - 1, zx))
-    zz = Math.max(0, Math.min(CFG.GRID_SIZE - 1, zz))
-    return zz * CFG.GRID_SIZE + zx
+    let zx = Math.floor((x - CFG.ZONE_ORIGIN_X) / CFG.ZONE_CELL)
+    let zz = Math.floor((z - CFG.ZONE_ORIGIN_Z) / CFG.ZONE_CELL)
+    zx = Math.max(0, Math.min(CFG.GRID_COLS - 1, zx))
+    zz = Math.max(0, Math.min(CFG.GRID_ROWS - 1, zz))
+    return zz * CFG.GRID_COLS + zx
   }
 
   // ── Asigna cada arista del grafo a la zona donde cae su punto medio (una sola vez) ──
@@ -74,17 +76,21 @@ export class ZoneSystem {
   }
 
   // ── Un plano rojo semitransparente por zona, oculto hasta que la zona se ponga roja ──
+  // Las celdas del borde sobresalen media manzana del mapa: el plano se recorta
+  // a MAP_BOUNDS para que el overlay no flote fuera de las avenidas límite.
   _buildOverlay() {
     const { xMin, xMax, zMin, zMax } = MAP_BOUNDS
-    const cw = (xMax - xMin) / CFG.GRID_SIZE, ch = (zMax - zMin) / CFG.GRID_SIZE
     this.planes = []
-    for (let zz = 0; zz < CFG.GRID_SIZE; zz++) {
-      for (let zx = 0; zx < CFG.GRID_SIZE; zx++) {
-        const cx = xMin + (zx + 0.5) * cw, cz = zMin + (zz + 0.5) * ch
+    for (let zz = 0; zz < CFG.GRID_ROWS; zz++) {
+      for (let zx = 0; zx < CFG.GRID_COLS; zx++) {
+        const x0 = Math.max(CFG.ZONE_ORIGIN_X + zx * CFG.ZONE_CELL, xMin)
+        const x1 = Math.min(CFG.ZONE_ORIGIN_X + (zx + 1) * CFG.ZONE_CELL, xMax)
+        const z0 = Math.max(CFG.ZONE_ORIGIN_Z + zz * CFG.ZONE_CELL, zMin)
+        const z1 = Math.min(CFG.ZONE_ORIGIN_Z + (zz + 1) * CFG.ZONE_CELL, zMax)
         const mat = new THREE.MeshBasicMaterial({ color: 0xf87171, transparent: true, opacity: 0, depthWrite: false })
-        const mesh = new THREE.Mesh(new THREE.PlaneGeometry(cw * 0.94, ch * 0.94), mat)
+        const mesh = new THREE.Mesh(new THREE.PlaneGeometry((x1 - x0) * 0.94, (z1 - z0) * 0.94), mat)
         mesh.rotation.x = -Math.PI / 2
-        mesh.position.set(cx, 0.5, cz)
+        mesh.position.set((x0 + x1) / 2, 0.5, (z0 + z1) / 2)
         mesh.visible = false
         this.scene.add(mesh)
         this.planes.push(mesh)
@@ -197,7 +203,7 @@ export class ZoneSystem {
       if (avg > bestC) { bestC = avg; best = i }
     }
     if (best < 0) return null
-    return { zone: best, zx: best % CFG.GRID_SIZE, zz: Math.floor(best / CFG.GRID_SIZE), avgC: bestC }
+    return { zone: best, zx: best % CFG.GRID_COLS, zz: Math.floor(best / CFG.GRID_COLS), avgC: bestC }
   }
 
   // Snapshot completo (para el heatmap del dashboard)
@@ -205,7 +211,7 @@ export class ZoneSystem {
     const out = []
     for (let i = 0; i < this.n; i++) {
       out.push({
-        zone: i, zx: i % CFG.GRID_SIZE, zz: Math.floor(i / CFG.GRID_SIZE),
+        zone: i, zx: i % CFG.GRID_COLS, zz: Math.floor(i / CFG.GRID_COLS),
         C: this.C[i], isRed: this.isRed[i] === 1,
         avgC: this.sampleCount[i] ? this.cSum[i] / this.sampleCount[i] : 0,
       })

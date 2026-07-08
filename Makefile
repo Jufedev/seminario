@@ -17,7 +17,12 @@ PYTHON := $(VENV)/bin/python
 PIP := $(VENV)/bin/pip
 KAFKA := ./scripts/kafka-local.sh
 TOPIC ?= red-points
-CELL_SIZE ?= 75
+# Detector grid defaults — must match the metaverse zone overlay: 60x60 cells
+# anchored mid-block at (-240,-195) (see env/env.dev.example).
+CELL_SIZE_X ?= 60
+CELL_SIZE_Y ?= 60
+GRID_ORIGIN_X ?= -240
+GRID_ORIGIN_Y ?= -195
 
 .DEFAULT_GOAL := help
 
@@ -68,8 +73,10 @@ test: ## Run the Python detector tests (detection logic + JS→Spark parsing sea
 	$(PYTHON) tests/test_detection_logic.py
 	$(PYTHON) tests/test_position_parsing.py
 
-detector: ## Run the Spark red-point detector (reads .env for broker + CELL_SIZE)
-	CELL_SIZE=$(CELL_SIZE) $(PYTHON) pipeline/red_point_detector.py
+detector: ## Run the Spark red-point detector (reads .env for broker + grid)
+	CELL_SIZE_X=$(CELL_SIZE_X) CELL_SIZE_Y=$(CELL_SIZE_Y) \
+	GRID_ORIGIN_X=$(GRID_ORIGIN_X) GRID_ORIGIN_Y=$(GRID_ORIGIN_Y) \
+	$(PYTHON) pipeline/red_point_detector.py
 
 # --- Metaverse (data source + renderer, via bun) ----------------------------
 

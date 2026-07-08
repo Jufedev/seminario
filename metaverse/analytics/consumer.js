@@ -31,7 +31,7 @@ function newUser() {
 }
 
 function newRoomState() {
-  const nZones = CFG.GRID_SIZE * CFG.GRID_SIZE
+  const nZones = CFG.GRID_COLS * CFG.GRID_ROWS
   return {
     users: new Map(),                        // slot → newUser()
     incidentsByType: {}, incidentsActive: new Set(), incidentsTotal: 0,
@@ -236,11 +236,9 @@ export class AnalyticsConsumer {
     if (st.zonesSamples > 0) {
       let best = 0
       for (let i = 1; i < st.zonesCSum.length; i++) if (st.zonesCSum[i] > st.zonesCSum[best]) best = i
-      const G = CFG.GRID_SIZE
-      const zx = best % G, zz = Math.floor(best / G)
-      const { xMin, xMax, zMin, zMax } = MAP_BOUNDS
-      const cx = xMin + (zx + 0.5) * (xMax - xMin) / G
-      const cz = zMin + (zz + 0.5) * (zMax - zMin) / G
+      const zx = best % CFG.GRID_COLS, zz = Math.floor(best / CFG.GRID_COLS)
+      const cx = CFG.ZONE_ORIGIN_X + (zx + 0.5) * CFG.ZONE_CELL
+      const cz = CFG.ZONE_ORIGIN_Z + (zz + 0.5) * CFG.ZONE_CELL
       const cra = CARRERAS.reduce((b, c) => Math.abs(c.x - cx) < Math.abs(b.x - cx) ? c : b)
       const cl = CALLES.reduce((b, c) => Math.abs(c.z - cz) < Math.abs(b.z - cz) ? c : b)
       critical = { zone: best, zx, zz, avgC: r2(st.zonesCSum[best] / st.zonesSamples), label: `${cra.name} × ${cl.name}` }
@@ -259,7 +257,7 @@ export class AnalyticsConsumer {
         fastestFleet: fastestFleet?.slot ?? null,
         mostCongested: mostCongested && mostCongested.reroutes > 0 ? mostCongested.slot : null,
       },
-      zones: { C: st.zonesC, red: st.zonesRed, grid: CFG.GRID_SIZE },
+      zones: { C: st.zonesC, red: st.zonesRed, cols: CFG.GRID_COLS, rows: CFG.GRID_ROWS },
       critical,
       series: st.series,
       mode: this.mode,

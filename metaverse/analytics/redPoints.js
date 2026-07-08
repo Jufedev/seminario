@@ -3,7 +3,7 @@
 //  de las ZONAS ROJAS es el detector Big Data de Spark, NO la analítica
 //  interna del metaverso. Este store lee el topic `red-points` (salida
 //  del job pipeline/red_point_detector.py), traduce el centro de cada
-//  celda al índice de zona 6×6 del metaverso y mantiene el conjunto de
+//  celda al índice de zona 8×7 del metaverso y mantiene el conjunto de
 //  zonas rojas ACTIVAS con TTL.
 //
 //  Correlación de sala: Spark ahora emite cada red-point con un campo
@@ -33,7 +33,7 @@ export const GLOBAL_ROOM_KEY = '__global__'
 export class RedPointStore {
   constructor({ bridge } = {}) {
     this.bridge = bridge
-    // Zonas rojas POR SALA: roomKey → Map<índice de zona 6×6, epoch ms de expiración>.
+    // Zonas rojas POR SALA: roomKey → Map<índice de zona 8×7, epoch ms de expiración>.
     // La clave GLOBAL_ROOM_KEY agrupa los red-points sin sala (los ven todas).
     this.zones = new Map()
     this.mode = 'local'
@@ -92,12 +92,12 @@ export class RedPointStore {
     console.log('[redpoints] modo local (sin Spark: no habrá zonas rojas hasta conectar el detector)')
   }
 
-  // Un red-point de Spark → refresca el TTL de su zona 6×6 bajo la sala del evento.
+  // Un red-point de Spark → refresca el TTL de su zona 8×7 bajo la sala del evento.
   _ingest(e) {
     this.consumed++
     // Spark emite center_x/center_y en las MISMAS coords de mundo que le
     // mandamos como x/y (three.js posX→x, posZ→y). Mapear el centro de la
-    // celda de vuelta al índice de zona 6×6 del metaverso.
+    // celda de vuelta al índice de zona 8×7 del metaverso.
     const cx = Number(e.center_x), cy = Number(e.center_y)
     if (!Number.isFinite(cx) || !Number.isFinite(cy)) return
     const zone = zoneIndexAt(cx, cy)

@@ -1,16 +1,16 @@
 // Tests de la integración Kafka del metaverso (bun test — sin Kafka ni Spark).
 // Blindan las propiedades load-bearing que las revisiones marcaron como riesgo:
 //  · velocidad MEDIDA (un avatar detenido DEBE reportar ~0, o Spark queda ciego),
-//  · mapeo coord→zona 6×6,
+//  · mapeo coord→zona (grilla anclada a mitad de manzana),
 //  · RedPointStore: un renombre de campo de Spark NO debe pasar en silencio.
 import { describe, expect, test } from 'bun:test'
 import { EventEmitter } from 'node:events'
 import { measuredSpeedMps } from '../server/speed.js'
-import { GRID_SIZE, zoneIndexAt } from '../server/zoneGrid.js'
+import { GRID_COLS, GRID_ROWS, zoneIndexAt } from '../server/zoneGrid.js'
 import { RedPointStore } from '../analytics/redPoints.js'
 
 const UNIT_TO_METERS = 4
-const LAST_CELL = GRID_SIZE * GRID_SIZE - 1 // 35
+const LAST_CELL = GRID_COLS * GRID_ROWS - 1 // 55
 
 describe('measuredSpeedMps (propiedad crítica de la tesis)', () => {
   test('sin desplazamiento → 0 m/s (auto encolado / detenido)', () => {
@@ -32,12 +32,13 @@ describe('measuredSpeedMps (propiedad crítica de la tesis)', () => {
   })
 })
 
-describe('zoneIndexAt (coords de mundo → celda del overlay 6×6)', () => {
-  test('la grilla es 6×6', () => {
-    expect(GRID_SIZE).toBe(6)
+describe('zoneIndexAt (coords de mundo → celda del overlay, grilla a mitad de manzana)', () => {
+  test('la grilla es 8×7', () => {
+    expect(GRID_COLS).toBe(8)
+    expect(GRID_ROWS).toBe(7)
   })
 
-  test('las esquinas mapean a la primera y última celda', () => {
+  test('las esquinas del mapa mapean a la primera y última celda', () => {
     expect(zoneIndexAt(-225, -180)).toBe(0)
     expect(zoneIndexAt(224, 179)).toBe(LAST_CELL)
   })
@@ -47,13 +48,39 @@ describe('zoneIndexAt (coords de mundo → celda del overlay 6×6)', () => {
     expect(zoneIndexAt(99999, 99999)).toBe(LAST_CELL)
   })
 
-  test('siempre devuelve un entero en [0, 35]', () => {
+  test('siempre devuelve un entero en [0, LAST_CELL]', () => {
     for (const [x, z] of [[0, 0], [100, -50], [-200, 150]]) {
       const zone = zoneIndexAt(x, z)
       expect(Number.isInteger(zone)).toBe(true)
       expect(zone).toBeGreaterThanOrEqual(0)
       expect(zone).toBeLessThanOrEqual(LAST_CELL)
     }
+  })
+
+  // La propiedad que motivó la grilla: los bordes de celda caen a MITAD de
+  // manzana, nunca sobre una vía. Los dos carriles de una cola (offset ±
+  // respecto del eje de la vía) deben caer SIEMPRE en la misma celda; con la
+  // grilla vieja (bordes sobre las calles) se partían entre dos zonas.
+  test('los dos carriles de cada vía caen en la misma celda', () => {
+    const LANE = 3   // mayor que el offset de carril real
+    for (let z = -180; z <= 180; z += 30) {        // eje de cada calle
+      for (let x = -220; x <= 220; x += 10) {
+        expect(zoneIndexAt(x, z - LANE)).toBe(zoneIndexAt(x, z + LANE))
+      }
+    }
+    for (let x = -225; x <= 225; x += 30) {        // eje de cada carrera
+      for (let z = -175; z <= 175; z += 10) {
+        expect(zoneIndexAt(x - LANE, z)).toBe(zoneIndexAt(x + LANE, z))
+      }
+    }
+  })
+
+  test('una manzana completa con sus 4 esquinas vive en una sola celda', () => {
+    // Manzana Cra30/Cra28 × Cl57/Cl56: esquinas (-225,-180) (-195,-180) (-225,-150) (-195,-150)
+    const cell = zoneIndexAt(-225, -180)
+    expect(zoneIndexAt(-195, -180)).toBe(cell)
+    expect(zoneIndexAt(-225, -150)).toBe(cell)
+    expect(zoneIndexAt(-195, -150)).toBe(cell)
   })
 })
 

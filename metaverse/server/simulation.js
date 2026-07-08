@@ -65,7 +65,7 @@ export class Simulation {
       agentSystem: this.agents, graphEdges: allEdges(),
       frequencySec: this.incidentFreq, headless: true, graphState: this.graphState,
     })
-    // M5: la analítica de zonas 6×6 (índice C, zonas rojas) corre en el servidor
+    // M5: la analítica de zonas 8×7 (índice C, zonas rojas) corre en el servidor
     this.zones = new ZoneSystem(fakeScene, {
       agentSystem: this.agents, incidentManager: this.incidents,
       headless: true, graphState: this.graphState,
@@ -95,7 +95,7 @@ export class Simulation {
 
     // ── Zonas rojas provenientes de SPARK (topic red-points) — fuente de verdad ──
     // Reemplazan a la detección interna de ZoneSystem para el overlay (rz) y el
-    // reruteo. Índices de zona 6×6 + unión de sus node ids (para la caché de rutas).
+    // reruteo. Índices de zona 8×7 + unión de sus node ids (para la caché de rutas).
     this._sparkRedZones = new Set()
     this._sparkRedNodeIds = new Set()
 
@@ -464,7 +464,7 @@ export class Simulation {
       if (!as.active[i]) continue
       a.push(i, r2(as.posX[i]), r2(as.posZ[i]), r2(as.heading[i]), as.state[i], as.owner[i])
     }
-    // zonas rojas activas → overlay en los clientes (índices de celda 6×6).
+    // zonas rojas activas → overlay en los clientes (índices de celda 8×7).
     // FUENTE: detector Spark (red-points), NO ZoneSystem (ver applySparkRedZones).
     const rz = [...this._sparkRedZones]
     return {

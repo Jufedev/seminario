@@ -30,9 +30,19 @@ ARCHIVE_PATH = os.getenv("ARCHIVE_PATH", "")
 
 # Detection parameters — these are the tunable knobs of the hypothesis:
 # a red point = at least MIN_STATIONARY_AVATARS with speed below
-# SPEED_THRESHOLD inside the same CELL_SIZE x CELL_SIZE map cell,
-# observed within a WINDOW_DURATION sliding window.
+# SPEED_THRESHOLD inside the same grid cell, observed within a
+# WINDOW_DURATION sliding window.
+#
+# The grid is defined per axis and anchored at an origin so it can tile the
+# consumer's zone overlay exactly (the metaverse map is 450x360 units starting
+# at (-225,-180): 6x6 zones of 75x60). A misaligned grid (square cells anchored
+# at 0) makes each cell straddle two zone rows, so red zones light up next to
+# the congestion instead of on it. CELL_SIZE is the square-cell fallback.
 CELL_SIZE = float(os.getenv("CELL_SIZE", "100"))
+CELL_SIZE_X = float(os.getenv("CELL_SIZE_X", str(CELL_SIZE)))
+CELL_SIZE_Y = float(os.getenv("CELL_SIZE_Y", str(CELL_SIZE)))
+GRID_ORIGIN_X = float(os.getenv("GRID_ORIGIN_X", "0"))
+GRID_ORIGIN_Y = float(os.getenv("GRID_ORIGIN_Y", "0"))
 SPEED_THRESHOLD = float(os.getenv("SPEED_THRESHOLD", "0.5"))
 MIN_STATIONARY_AVATARS = int(os.getenv("MIN_STATIONARY_AVATARS", "5"))
 WINDOW_DURATION = os.getenv("WINDOW_DURATION", "60 seconds")
@@ -86,7 +96,13 @@ def parse_positions(raw):
     )
 
 
-def detect_red_points(positions):
+def detect_red_points(
+    positions,
+    cell_size_x=None,
+    cell_size_y=None,
+    grid_origin_x=None,
+    grid_origin_y=None,
+):
     """Core detection: stationary avatars grouped by map cell in a sliding window.
 
     Takes a DataFrame with (avatar_id, x, y, speed, event_time, room) and
@@ -94,18 +110,24 @@ def detect_red_points(positions):
     MIN_STATIONARY_AVATARS distinct avatars were below SPEED_THRESHOLD.
     Grouping by room keeps simultaneous rooms from pooling their congestion;
     a null room (legacy messages) forms one group. Works on both streaming and
-    batch
-    DataFrames (the watermark is ignored in batch), which is what makes the
-    logic unit-testable without Kafka.
+    batch DataFrames (the watermark is ignored in batch), which is what makes
+    the logic unit-testable without Kafka.
+
+    The grid parameters default to the env-driven module constants; tests pass
+    them explicitly to stay hermetic.
     """
+    csx = CELL_SIZE_X if cell_size_x is None else cell_size_x
+    csy = CELL_SIZE_Y if cell_size_y is None else cell_size_y
+    ox = GRID_ORIGIN_X if grid_origin_x is None else grid_origin_x
+    oy = GRID_ORIGIN_Y if grid_origin_y is None else grid_origin_y
     return (
         positions.filter(F.col("speed") < SPEED_THRESHOLD)
         .withWatermark("event_time", WATERMARK_DELAY)
         .groupBy(
             F.window("event_time", WINDOW_DURATION, WINDOW_SLIDE).alias("w"),
             F.col("room"),
-            F.floor(F.col("x") / CELL_SIZE).alias("cell_x"),
-            F.floor(F.col("y") / CELL_SIZE).alias("cell_y"),
+            F.floor((F.col("x") - ox) / csx).alias("cell_x"),
+            F.floor((F.col("y") - oy) / csy).alias("cell_y"),
         )
         .agg(F.approx_count_distinct("avatar_id").alias("stationary_avatars"))
         .filter(F.col("stationary_avatars") >= MIN_STATIONARY_AVATARS)
@@ -143,8 +165,8 @@ def main() -> None:
                 F.col("room"),
                 F.col("cell_x"),
                 F.col("cell_y"),
-                ((F.col("cell_x") + 0.5) * CELL_SIZE).alias("center_x"),
-                ((F.col("cell_y") + 0.5) * CELL_SIZE).alias("center_y"),
+                ((F.col("cell_x") + 0.5) * CELL_SIZE_X + GRID_ORIGIN_X).alias("center_x"),
+                ((F.col("cell_y") + 0.5) * CELL_SIZE_Y + GRID_ORIGIN_Y).alias("center_y"),
                 F.col("stationary_avatars"),
                 F.col("w.start").cast("string").alias("window_start"),
                 F.col("w.end").cast("string").alias("window_end"),
@@ -167,7 +189,8 @@ def main() -> None:
 
     print(
         f"Red-point detector running: {INPUT_TOPIC} -> {OUTPUT_TOPIC} "
-        f"(cell={CELL_SIZE}, min_avatars={MIN_STATIONARY_AVATARS}, "
+        f"(cell={CELL_SIZE_X}x{CELL_SIZE_Y} @ ({GRID_ORIGIN_X},{GRID_ORIGIN_Y}), "
+        f"min_avatars={MIN_STATIONARY_AVATARS}, "
         f"window={WINDOW_DURATION}, slide={WINDOW_SLIDE})"
     )
 

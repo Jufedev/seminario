@@ -85,19 +85,24 @@ export function createOnlineWorld(canvas, { initialMode = '2d', onHud = null, hi
   for (let i = 0; i < SIM_CONFIG.MAX_AGENTS; i++) agentMesh.setMatrixAt(i, _m4)
   agentMesh.instanceMatrix.needsUpdate = true
 
-  // ── Overlay de zonas rojas (M5): 36 planos, visibles según snapshot.rz ──
-  const G = ANALYTICS_CONFIG.GRID_SIZE
+  // ── Overlay de zonas rojas (M5): un plano por celda, visibles según snapshot.rz ──
+  // Grilla anclada a mitad de manzana (ver analytics/config.js); las celdas del
+  // borde se recortan a MAP_BOUNDS para no flotar fuera de las avenidas límite.
+  const CFG = ANALYTICS_CONFIG
   const zonePlanes = []
   {
-    const cw = (xMax - xMin) / G, ch = (zMax - zMin) / G
-    for (let zz = 0; zz < G; zz++) {
-      for (let zx = 0; zx < G; zx++) {
+    for (let zz = 0; zz < CFG.GRID_ROWS; zz++) {
+      for (let zx = 0; zx < CFG.GRID_COLS; zx++) {
+        const x0 = Math.max(CFG.ZONE_ORIGIN_X + zx * CFG.ZONE_CELL, xMin)
+        const x1 = Math.min(CFG.ZONE_ORIGIN_X + (zx + 1) * CFG.ZONE_CELL, xMax)
+        const z0 = Math.max(CFG.ZONE_ORIGIN_Z + zz * CFG.ZONE_CELL, zMin)
+        const z1 = Math.min(CFG.ZONE_ORIGIN_Z + (zz + 1) * CFG.ZONE_CELL, zMax)
         const mesh = new THREE.Mesh(
-          new THREE.PlaneGeometry(cw * 0.94, ch * 0.94),
+          new THREE.PlaneGeometry((x1 - x0) * 0.94, (z1 - z0) * 0.94),
           new THREE.MeshBasicMaterial({ color: 0xf87171, transparent: true, opacity: 0.22, depthWrite: false })
         )
         mesh.rotation.x = -Math.PI / 2
-        mesh.position.set(xMin + (zx + 0.5) * cw, 0.5, zMin + (zz + 0.5) * ch)
+        mesh.position.set((x0 + x1) / 2, 0.5, (z0 + z1) / 2)
         mesh.visible = false
         scene.add(mesh)
         zonePlanes.push(mesh)
