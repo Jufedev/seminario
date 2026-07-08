@@ -166,10 +166,11 @@ export function createOnlineWorld(canvas, { initialMode = '2d', onHud = null, hi
         _e.set(0, ag.h, 0); _q.setFromEuler(_e)
         _m4.compose(_pos.set(ag.x, 0.55, ag.z), _q, isPersonal ? _pers : own ? _big : _one)
         agentMesh.setMatrixAt(n, _m4)
-        // color por dueño; el personal se aclara hacia blanco; llegados se apagan;
+        // color por dueño; el personal PARPADEA hacia blanco (~0.8s) para no
+        // camuflarse con la flota de su mismo color; llegados se apagan;
         // lo ajeno se atenúa cuando hay resaltado (vista de usuario)
         _color.copy(OWNER_THREE[slot] ?? FALLBACK_COLOR)
-        if (isPersonal) _color.lerp(WHITE, 0.35)
+        if (isPersonal) _color.lerp(WHITE, 0.55 + 0.45 * Math.sin(now * 0.008))
         if (ag.s === AGENT_STATE.ARRIVED) _color.multiplyScalar(0.45)
         if (highlightOwner != null && !own) _color.multiplyScalar(0.4)
         agentMesh.setColorAt(n, _color)
