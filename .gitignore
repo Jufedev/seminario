@@ -5,3 +5,6 @@ __pycache__/
 node_modules/
 dist/
 *.pdf
+
+# Local dev logs (make dev)
+logs/

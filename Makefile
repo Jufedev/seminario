@@ -85,6 +85,9 @@ metaverse-server: ## Run the authoritative server (produces avatar-positions, co
 metaverse-web: ## Run the browser client (Vite dev server via bun)
 	cd metaverse && bun run dev
 
+dev: ## Bring up the WHOLE local loop with one command (Kafka+detector+server+web; Ctrl-C stops all)
+	./scripts/dev-up.sh
+
 # --- Infrastructure (prod — Azure via Terraform) ----------------------------
 
 infra-init: ## terraform init (needs ARM_SUBSCRIPTION_ID)
