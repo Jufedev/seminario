@@ -227,11 +227,12 @@ resource "azurerm_eventhub_consumer_group" "metaverse_backend" {
 # Single namespace-level connection string for producer, Spark and consumer.
 # Enough for an academic project; production would use per-app rules.
 resource "azurerm_eventhub_namespace_authorization_rule" "app" {
-  name         = "app-access"
-  namespace_id = azurerm_eventhub_namespace.main.id
-  listen       = true
-  send         = true
-  manage       = false
+  name                = "app-access"
+  namespace_name      = azurerm_eventhub_namespace.main.name
+  resource_group_name = azurerm_resource_group.bigdata.name
+  listen              = true
+  send                = true
+  manage              = false
 }
 
 # --- ADLS Gen2: raw historical archive (the "Big Data" storage) -----------

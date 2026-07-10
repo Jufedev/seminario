@@ -8,3 +8,8 @@ dist/
 
 # Local dev logs (make dev)
 logs/
+
+# Terraform working files (provider binaries and state stay local)
+infra/.terraform/
+infra/*.tfstate*
+infra/terraform.tfvars
