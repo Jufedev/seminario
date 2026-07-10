@@ -8,7 +8,7 @@
 //  KafkaBridge (mismos eventos, misma agregación — cero cambios aquí).
 // ════════════════════════════════════════════════════════════════
 import { Kafka, logLevel } from 'kafkajs'
-import { TOPICS } from '../server/kafkaProducer.js'
+import { SIM_EVENTS_TOPIC } from '../server/kafkaProducer.js'
 import { kafkaConfig, kafkaBrokers } from '../server/kafkaConfig.js'
 import { CALLES, CARRERAS, MAP_BOUNDS } from '../src/graph/mapData.js'
 import { ANALYTICS_CONFIG as CFG } from '../src/analytics/config.js'
@@ -58,24 +58,25 @@ export class AnalyticsConsumer {
   async start() {
     // Preferir Kafka real; si el bridge quedó en local, escuchar el bus en-proceso
     if (this.bridge.mode === 'kafka') {
-      try {
-        const client = new Kafka({ ...kafkaConfig('ecci-analytics'), logLevel: logLevel.NOTHING })
-        this.consumer = client.consumer({ groupId: 'ecci-analytics' })
-        // Un fallo del broker DESPUÉS del arranque dispara CRASH; sin este listener
-        // el consumidor moriría en silencio y la analítica dejaría de agregar sin señal.
-        this.consumer.on(this.consumer.events.CRASH, e =>
-          console.error('[analytics] CRASH del consumidor Kafka:', e.payload?.error?.message ?? e.payload?.error, '— la analítica puede quedar detenida'))
-        await this.consumer.connect()
-        for (const topic of TOPICS) await this.consumer.subscribe({ topic })
-        await this.consumer.run({
-          eachMessage: async ({ topic, message }) => {
-            try { this._ingest(topic, JSON.parse(message.value.toString())) } catch { /* evento corrupto */ }
-          },
-        })
-        this.mode = 'kafka'
-        console.log('[analytics] consumidor Kafka activo (groupId ecci-analytics)')
-      } catch (err) {
-        console.error('[analytics] consumidor Kafka falló, usando bus local:', err.message)
+      // Reintentos: sim-events puede haber sido creado milisegundos antes por el
+      // bridge y el broker aún no hospeda la partición ("does not host this
+      // topic-partition"). Sin reintentos, esa carrera degradaba el bridge
+      // ENTERO a modo local (productor incluido → sin feed a Spark).
+      let lastErr = null
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          await this._startKafkaConsumer()
+          lastErr = null
+          break
+        } catch (err) {
+          lastErr = err
+          try { await this.consumer?.disconnect() } catch { /* reintentando */ }
+          console.warn(`[analytics] intento ${attempt}/3 fallo: ${err.message} — reintentando…`)
+          await new Promise(r => setTimeout(r, 1500 * attempt))
+        }
+      }
+      if (lastErr) {
+        console.error('[analytics] consumidor Kafka falló tras 3 intentos, usando bus local:', lastErr.message)
         // coherencia: si el consumidor no puede leer del broker, el productor también
         // baja a modo local — si no, los eventos irían a Kafka y nadie los agregaría
         this.bridge.mode = 'local'
@@ -86,6 +87,30 @@ export class AnalyticsConsumer {
     }
     // Cierre de ventana cada ~1s: consolida los contadores en las series de tiempo
     this._windowTimer = setInterval(() => this._closeWindows(), 1000)
+  }
+
+  async _startKafkaConsumer() {
+    const client = new Kafka({ ...kafkaConfig('ecci-analytics'), logLevel: logLevel.NOTHING })
+    this.consumer = client.consumer({ groupId: 'ecci-analytics' })
+    // Un fallo del broker DESPUÉS del arranque dispara CRASH; sin este listener
+    // el consumidor moriría en silencio y la analítica dejaría de agregar sin señal.
+    this.consumer.on(this.consumer.events.CRASH, e =>
+      console.error('[analytics] CRASH del consumidor Kafka:', e.payload?.error?.message ?? e.payload?.error, '— la analítica puede quedar detenida'))
+    await this.consumer.connect()
+    // Un solo topic físico: los internos viajan consolidados en sim-events
+    // con su topic lógico en el campo `topic` del mensaje (límite de 10
+    // event hubs por namespace en Event Hubs Standard).
+    await this.consumer.subscribe({ topic: SIM_EVENTS_TOPIC })
+    await this.consumer.run({
+      eachMessage: async ({ message }) => {
+        try {
+          const e = JSON.parse(message.value.toString())
+          if (e.topic) this._ingest(e.topic, e)
+        } catch { /* evento corrupto */ }
+      },
+    })
+    this.mode = 'kafka'
+    console.log('[analytics] consumidor Kafka activo (groupId ecci-analytics, topic sim-events)')
   }
 
   _attachLocal() {

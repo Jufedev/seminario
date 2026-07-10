@@ -210,6 +210,16 @@ resource "azurerm_eventhub" "red_points" {
   message_retention = 1
 }
 
+# All internal simulation topics travel consolidated in one hub (the logical
+# topic rides inside each message): Event Hubs Standard caps a namespace at
+# 10 event hubs, and the metaverse would otherwise need 13.
+resource "azurerm_eventhub" "sim_events" {
+  name              = "sim-events"
+  namespace_id      = azurerm_eventhub_namespace.main.id
+  partition_count   = 1
+  message_retention = 1
+}
+
 resource "azurerm_eventhub_consumer_group" "spark_detector" {
   name                = "spark-detector"
   namespace_name      = azurerm_eventhub_namespace.main.name

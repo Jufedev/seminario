@@ -32,6 +32,14 @@ export const TOPICS = [
 // feed por-avatar hacia el detector y `red-points` es su salida.
 export const INGEST_TOPICS = ['avatar-positions', 'red-points']
 
+// En el CABLE, los topics internos de TOPICS viajan CONSOLIDADOS en un único
+// topic físico: cada mensaje lleva su topic lógico en el campo `topic`.
+// Motivo: Event Hubs Standard permite máximo 10 event hubs por namespace y
+// TOPICS+INGEST suman 13 — los que no se crearan harían fallar la suscripción
+// del consumidor y degradarían el bridge entero a modo local (sin Spark).
+// Físicos en total: sim-events + avatar-positions + red-points = 3.
+export const SIM_EVENTS_TOPIC = 'sim-events'
+
 export class KafkaBridge {
   constructor() {
     this.brokers = kafkaBrokers()   // KAFKA_BOOTSTRAP / Event Hubs / localhost:9092
@@ -58,15 +66,21 @@ export class KafkaBridge {
       // Incluye los topics del contrato Spark (avatar-positions / red-points).
       const admin = client.admin()
       await admin.connect()
-      await admin.createTopics({
-        topics: [...TOPICS, ...INGEST_TOPICS].map(t => ({ topic: t, numPartitions: 1, replicationFactor: 1 })),
-        waitForLeaders: true,
-      }).catch(() => { /* ya existen (o Event Hubs los pre-provisiona) */ })
+      // Topic por topic y con el fallo VISIBLE: un lote con topics ya existentes
+      // puede abortar entero en silencio y dejar sin crear el que faltaba (así
+      // se perdió sim-events la primera vez, con el catch mudo del lote).
+      for (const t of [SIM_EVENTS_TOPIC, ...INGEST_TOPICS]) {
+        await admin.createTopics({
+          topics: [{ topic: t, numPartitions: 1, replicationFactor: 1 }],
+          waitForLeaders: true,
+        }).catch(err => console.warn(`[kafka] no se pudo crear el topic ${t}:`, err.message,
+          '— si no existe, el consumidor de ese topic va a fallar'))
+      }
       await admin.disconnect()
       this.producer = producer
       this.client = client
       this.mode = 'kafka'
-      console.log(`[kafka] conectado a ${this.brokers.join(',')} — ${TOPICS.length + INGEST_TOPICS.length} topics listos, los eventos fluyen por Kafka`)
+      console.log(`[kafka] conectado a ${this.brokers.join(',')} — 3 topics físicos listos (${TOPICS.length} lógicos consolidados en ${SIM_EVENTS_TOPIC})`)
     } catch (err) {
       this.mode = 'local'
       if (process.env.EVENTHUBS_CONNECTION_STRING) {
@@ -95,8 +109,17 @@ export class KafkaBridge {
     const event = { room: this.room, ts: Date.now(), ...payload }
     this.published++
     if (this.mode === 'kafka') {
+      // Topics del contrato Spark → tal cual; internos → envelope en sim-events
+      // (el topic lógico viaja en el campo `topic` del mensaje).
+      const consolidated = !INGEST_TOPICS.includes(topic)
       this.producer
-        .send({ topic, messages: [{ key: event.room ?? '', value: JSON.stringify(event) }] })
+        .send({
+          topic: consolidated ? SIM_EVENTS_TOPIC : topic,
+          messages: [{
+            key: event.room ?? '',
+            value: JSON.stringify(consolidated ? { topic, ...event } : event),
+          }],
+        })
         .catch(err => console.error('[kafka] error publicando', topic, err.message))
     } else {
       // modo local: entrega síncrona al consumidor en-proceso

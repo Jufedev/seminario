@@ -9,6 +9,7 @@ import { measuredSpeedMps } from '../server/speed.js'
 import { GRID_COLS, GRID_ROWS, zoneIndexAt } from '../server/zoneGrid.js'
 import { RedPointStore } from '../analytics/redPoints.js'
 import { AnalyticsConsumer } from '../analytics/consumer.js'
+import { KafkaBridge, SIM_EVENTS_TOPIC } from '../server/kafkaProducer.js'
 import { ZoneSystem } from '../src/analytics/zones.js'
 import { createEdgeState } from '../src/graph/mapData.js'
 import { kafka } from '../src/kafka/producer.js'
@@ -139,6 +140,57 @@ describe('RedPointStore (red-points de Spark → zonas activas por sala)', () =>
     store.zones.get('ECCI-1234').set(zone, Date.now() - 1) // forzar expiración
     expect(store.activeZonesFor('ECCI-1234')).not.toContain(zone)
     expect(store.zones.has('ECCI-1234')).toBe(false) // sala sin zonas vivas → se descarta
+  })
+})
+
+describe('KafkaBridge (topics internos consolidados en sim-events)', () => {
+  // Event Hubs Standard permite 10 hubs por namespace; los 11 topics internos
+  // viajan en sim-events con el topic lógico adentro del mensaje (3 físicos).
+  const kafkaModeBridge = () => {
+    const bridge = new KafkaBridge()
+    bridge.mode = 'kafka'
+    bridge.sent = []
+    bridge.producer = { send: async m => { bridge.sent.push(m); return m } }
+    return bridge
+  }
+
+  test('un topic interno viaja en sim-events con su topic lógico en el mensaje', () => {
+    const bridge = kafkaModeBridge()
+    bridge.setContext('ECCI-1234')
+    bridge.publish('zone.red', { zone: 5, C: 0.7 })
+    expect(bridge.sent).toHaveLength(1)
+    expect(bridge.sent[0].topic).toBe(SIM_EVENTS_TOPIC)
+    const value = JSON.parse(bridge.sent[0].messages[0].value)
+    expect(value.topic).toBe('zone.red')
+    expect(value.zone).toBe(5)
+    expect(value.room).toBe('ECCI-1234')
+  })
+
+  test('los topics del contrato Spark viajan tal cual, sin envelope', () => {
+    const bridge = kafkaModeBridge()
+    bridge.setContext('ECCI-1234')
+    bridge.publishBatch('avatar-positions', [{ avatar_id: 'a-1', x: 0, y: 0, speed: 0, ts: 'T' }])
+    expect(bridge.sent[0].topic).toBe('avatar-positions')
+    expect(JSON.parse(bridge.sent[0].messages[0].value).topic).toBeUndefined()
+  })
+
+  test('en modo local el bus en-proceso entrega el topic lógico como siempre', () => {
+    const bridge = new KafkaBridge()   // mode 'local' por defecto
+    const seen = []
+    bridge.emitter.on('event', e => seen.push(e))
+    bridge.setContext('ECCI-1234')
+    bridge.publish('zone.red', { zone: 5 })
+    expect(seen[0].topic).toBe('zone.red')
+    expect(seen[0].event.zone).toBe(5)
+  })
+
+  test('el consumidor desenvuelve sim-events hacia la ingesta por topic lógico', () => {
+    const c = new AnalyticsConsumer({ bridge: { mode: 'local', emitter: new EventEmitter() } })
+    // Simula el eachMessage del modo kafka: mensaje de sim-events con envelope
+    const wire = JSON.stringify({ topic: 'route.decision', room: 'ECCI-1234', userId: 1, choice: 'alternative', ahorro_estimado_s: 9 })
+    const e = JSON.parse(wire)
+    c._ingest(e.topic, e)
+    expect(c.metricsForUser('ECCI-1234', 1).decisions.alternative).toBe(1)
   })
 })
 

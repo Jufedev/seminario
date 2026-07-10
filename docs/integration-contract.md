@@ -59,7 +59,11 @@ aristas y recalculando rutas de los avatares en camino.
 
 Los demás topics del metaverso (`agent.spawn`, `agent.reroute`, `agent.arrived`,
 `incident.start/end`, `route.decision`, `analytics.snapshot`, …) son internos de
-la simulación y NO forman parte de este contrato.
+la simulación y NO forman parte de este contrato. En el cable viajan
+**consolidados en un único topic físico `sim-events`** (cada mensaje lleva su
+topic lógico en el campo `topic`): Event Hubs Standard limita el namespace a 10
+event hubs, así que los topics físicos totales son solo 3 (`sim-events` +
+`avatar-positions` + `red-points`).
 
 El detector archiva de forma **opcional** el feed histórico de `avatar-positions`
 (todas las posiciones parseadas) a Parquet cuando `ARCHIVE_PATH` está definido:
