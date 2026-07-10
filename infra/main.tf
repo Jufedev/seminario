@@ -3,6 +3,11 @@
 # Pipeline:  metaverse backend -> Event Hubs (Kafka endpoint) -> Databricks
 #            (Spark Structured Streaming) -> Event Hubs -> metaverse backend
 # Storage:   ADLS Gen2 for the raw historical event archive.
+# Compute:   one VM hosting the metaverse frontend and backend.
+#
+# Layout follows docs/arquitectura.drawio: four resource groups
+# (network, compute, bigdata, storage) under SUB-Prod. The management
+# group and subscription are managed outside Terraform.
 
 locals {
   # Governance tags (Well-Architected: operational excellence)
@@ -14,6 +19,8 @@ locals {
   }
 }
 
+data "azurerm_subscription" "current" {}
+
 resource "random_string" "suffix" {
   length  = 6
   lower   = true
@@ -22,10 +29,156 @@ resource "random_string" "suffix" {
   special = false
 }
 
-resource "azurerm_resource_group" "main" {
-  name     = "rg-${var.project_name}"
+# --- Resource groups -------------------------------------------------------
+
+resource "azurerm_resource_group" "network" {
+  name     = "rg-${var.project_name}-network"
   location = var.location
   tags     = local.tags
+}
+
+resource "azurerm_resource_group" "compute" {
+  name     = "rg-${var.project_name}-compute"
+  location = var.location
+  tags     = local.tags
+}
+
+resource "azurerm_resource_group" "bigdata" {
+  name     = "rg-${var.project_name}-bigdata"
+  location = var.location
+  tags     = local.tags
+}
+
+resource "azurerm_resource_group" "storage" {
+  name     = "rg-${var.project_name}-storage"
+  location = var.location
+  tags     = local.tags
+}
+
+# --- Network: VNet with a public subnet for the app VM --------------------
+
+resource "azurerm_virtual_network" "main" {
+  name                = "vnet-${var.project_name}"
+  location            = azurerm_resource_group.network.location
+  resource_group_name = azurerm_resource_group.network.name
+  address_space       = ["10.0.0.0/16"]
+  tags                = local.tags
+}
+
+resource "azurerm_subnet" "public" {
+  name                 = "snet-${var.project_name}-public"
+  resource_group_name  = azurerm_resource_group.network.name
+  virtual_network_name = azurerm_virtual_network.main.name
+  address_prefixes     = ["10.0.1.0/24"]
+}
+
+resource "azurerm_network_security_group" "app" {
+  name                = "nsg-${var.project_name}-app"
+  location            = azurerm_resource_group.network.location
+  resource_group_name = azurerm_resource_group.network.name
+  tags                = local.tags
+
+  security_rule {
+    name                       = "allow-ssh"
+    priority                   = 100
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "22"
+    source_address_prefix      = "*"
+    destination_address_prefix = "*"
+  }
+
+  security_rule {
+    name                       = "allow-http"
+    priority                   = 110
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "80"
+    source_address_prefix      = "*"
+    destination_address_prefix = "*"
+  }
+
+  security_rule {
+    name                       = "allow-websocket"
+    priority                   = 120
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = tostring(var.app_port)
+    source_address_prefix      = "*"
+    destination_address_prefix = "*"
+  }
+}
+
+resource "azurerm_subnet_network_security_group_association" "public" {
+  subnet_id                 = azurerm_subnet.public.id
+  network_security_group_id = azurerm_network_security_group.app.id
+}
+
+# --- Compute: VM hosting the metaverse frontend and backend ---------------
+
+resource "azurerm_public_ip" "app" {
+  name                = "pip-${var.project_name}-app"
+  location            = azurerm_resource_group.compute.location
+  resource_group_name = azurerm_resource_group.compute.name
+  allocation_method   = "Static"
+  sku                 = "Standard"
+  tags                = local.tags
+}
+
+resource "azurerm_network_interface" "app" {
+  name                = "nic-${var.project_name}-app"
+  location            = azurerm_resource_group.compute.location
+  resource_group_name = azurerm_resource_group.compute.name
+  tags                = local.tags
+
+  ip_configuration {
+    name                          = "primary"
+    subnet_id                     = azurerm_subnet.public.id
+    private_ip_address_allocation = "Dynamic"
+    public_ip_address_id          = azurerm_public_ip.app.id
+  }
+}
+
+resource "azurerm_linux_virtual_machine" "app" {
+  name                  = "vm-${var.project_name}-app"
+  location              = azurerm_resource_group.compute.location
+  resource_group_name   = azurerm_resource_group.compute.name
+  size                  = var.vm_size
+  admin_username        = var.vm_admin_username
+  network_interface_ids = [azurerm_network_interface.app.id]
+  tags                  = local.tags
+
+  admin_ssh_key {
+    username   = var.vm_admin_username
+    public_key = var.vm_ssh_public_key
+  }
+
+  os_disk {
+    caching              = "ReadWrite"
+    storage_account_type = "Standard_LRS"
+  }
+
+  source_image_reference {
+    publisher = "Canonical"
+    offer     = "0001-com-ubuntu-server-jammy"
+    sku       = "22_04-lts-gen2"
+    version   = "latest"
+  }
+
+  # cloud-init: installs bun + nginx, builds the Vite client, and runs the
+  # authoritative server as a systemd unit wired to Event Hubs.
+  custom_data = base64encode(templatefile("${path.module}/cloud-init.yaml", {
+    repo_url                    = var.repo_url
+    admin_username              = var.vm_admin_username
+    kafka_bootstrap             = "${azurerm_eventhub_namespace.main.name}.servicebus.windows.net:9093"
+    eventhubs_connection_string = azurerm_eventhub_namespace_authorization_rule.app.primary_connection_string
+  }))
 }
 
 # --- Event Hubs: the "Apache Kafka" of the architecture -------------------
@@ -34,13 +187,13 @@ resource "azurerm_resource_group" "main" {
 # far above what the simulation produces.
 
 resource "azurerm_eventhub_namespace" "main" {
-  name                 = "evhns-${var.project_name}-${random_string.suffix.result}"
-  location             = azurerm_resource_group.main.location
-  resource_group_name  = azurerm_resource_group.main.name
-  sku                  = "Standard"
-  capacity             = 1
-  minimum_tls_version  = "1.2"
-  tags                 = local.tags
+  name                = "evhns-${var.project_name}-${random_string.suffix.result}"
+  location            = azurerm_resource_group.bigdata.location
+  resource_group_name = azurerm_resource_group.bigdata.name
+  sku                 = "Standard"
+  capacity            = 1
+  minimum_tls_version = "1.2"
+  tags                = local.tags
 }
 
 resource "azurerm_eventhub" "avatar_positions" {
@@ -61,14 +214,14 @@ resource "azurerm_eventhub_consumer_group" "spark_detector" {
   name                = "spark-detector"
   namespace_name      = azurerm_eventhub_namespace.main.name
   eventhub_name       = azurerm_eventhub.avatar_positions.name
-  resource_group_name = azurerm_resource_group.main.name
+  resource_group_name = azurerm_resource_group.bigdata.name
 }
 
 resource "azurerm_eventhub_consumer_group" "metaverse_backend" {
   name                = "metaverse-backend"
   namespace_name      = azurerm_eventhub_namespace.main.name
   eventhub_name       = azurerm_eventhub.red_points.name
-  resource_group_name = azurerm_resource_group.main.name
+  resource_group_name = azurerm_resource_group.bigdata.name
 }
 
 # Single namespace-level connection string for producer, Spark and consumer.
@@ -85,8 +238,8 @@ resource "azurerm_eventhub_namespace_authorization_rule" "app" {
 
 resource "azurerm_storage_account" "datalake" {
   name                            = "st${var.project_name}${random_string.suffix.result}"
-  location                        = azurerm_resource_group.main.location
-  resource_group_name             = azurerm_resource_group.main.name
+  location                        = azurerm_resource_group.storage.location
+  resource_group_name             = azurerm_resource_group.storage.name
   account_tier                    = "Standard"
   account_replication_type        = "LRS"
   is_hns_enabled                  = true # hierarchical namespace = ADLS Gen2
@@ -106,19 +259,20 @@ resource "azurerm_storage_data_lake_gen2_filesystem" "events" {
 
 resource "azurerm_databricks_workspace" "main" {
   name                = "dbw-${var.project_name}"
-  location            = azurerm_resource_group.main.location
-  resource_group_name = azurerm_resource_group.main.name
+  location            = azurerm_resource_group.bigdata.location
+  resource_group_name = azurerm_resource_group.bigdata.name
   sku                 = "standard"
   tags                = local.tags
 }
 
 # --- Budget guard: alert before student credits burn out ------------------
+# Subscription-level so it covers all four resource groups at once.
 
-resource "azurerm_consumption_budget_resource_group" "guard" {
-  name              = "budget-${var.project_name}"
-  resource_group_id = azurerm_resource_group.main.id
-  amount            = var.budget_amount
-  time_grain        = "Monthly"
+resource "azurerm_consumption_budget_subscription" "guard" {
+  name            = "budget-${var.project_name}"
+  subscription_id = data.azurerm_subscription.current.id
+  amount          = var.budget_amount
+  time_grain      = "Monthly"
 
   time_period {
     start_date = var.budget_start_date

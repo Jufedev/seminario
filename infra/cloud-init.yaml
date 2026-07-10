@@ -1,0 +1,60 @@
+#cloud-config
+# Provisions the metaverse app VM: nginx serves the built Vite client on :80,
+# a systemd unit runs the authoritative server (bun, WebSocket :8080) pointed
+# at Event Hubs. Rendered by Terraform via templatefile() into custom_data.
+
+package_update: true
+packages:
+  - git
+  - nginx
+  - unzip
+
+write_files:
+  - path: /etc/metaverse.env
+    permissions: "0600"
+    content: |
+      KAFKA_BOOTSTRAP=${kafka_bootstrap}
+      EVENTHUBS_CONNECTION_STRING=${eventhubs_connection_string}
+
+  - path: /etc/systemd/system/metaverse-server.service
+    content: |
+      [Unit]
+      Description=Metaverse authoritative server (WebSocket + Kafka bridge)
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=simple
+      User=${admin_username}
+      WorkingDirectory=/opt/seminario/metaverse
+      EnvironmentFile=/etc/metaverse.env
+      ExecStart=/usr/local/bin/bun server/index.js
+      Restart=always
+      RestartSec=3
+
+      [Install]
+      WantedBy=multi-user.target
+
+  - path: /etc/nginx/sites-available/metaverse
+    content: |
+      server {
+        listen 80 default_server;
+        root /var/www/metaverse;
+        index index.html;
+        location / {
+          try_files $uri $uri/ /index.html;
+        }
+      }
+
+runcmd:
+  # Bun runs both the dependency install/build and the server (repo standard).
+  - curl -fsSL https://bun.sh/install | BUN_INSTALL=/usr/local bash
+  - git clone ${repo_url} /opt/seminario
+  - chown -R ${admin_username}:${admin_username} /opt/seminario
+  - sudo -u ${admin_username} bash -c 'cd /opt/seminario/metaverse && /usr/local/bin/bun install && /usr/local/bin/bun run build'
+  - mkdir -p /var/www/metaverse
+  - cp -r /opt/seminario/metaverse/dist/. /var/www/metaverse/
+  - ln -sf /etc/nginx/sites-available/metaverse /etc/nginx/sites-enabled/default
+  - systemctl restart nginx
+  - systemctl daemon-reload
+  - systemctl enable --now metaverse-server
