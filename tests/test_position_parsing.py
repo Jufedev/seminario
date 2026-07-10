@@ -23,8 +23,12 @@ from pathlib import Path
 # CELL_SIZE is read at import time by the detector module; pin it (hard set, so an
 # exported value can't win) to keep the cell math deterministic regardless of env.
 os.environ["CELL_SIZE"] = "100"
-# Same for the dwell filter: the fixture's 15 samples/avatar assume the default.
+# Same for the detection thresholds: the fixtures assume the code defaults, so a
+# tuned .env (exported by the Makefile) must not shift them.
 os.environ["MIN_MEAN_DWELL_S"] = "12"
+os.environ["MIN_STATIONARY_AVATARS"] = "5"
+os.environ["WINDOW_DURATION"] = "30 seconds"
+os.environ["WINDOW_SLIDE"] = "10 seconds"
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "pipeline"))
 

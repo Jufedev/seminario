@@ -30,6 +30,11 @@ os.environ["CELL_SIZE_Y"] = "100"
 os.environ["GRID_ORIGIN_X"] = "0"
 os.environ["GRID_ORIGIN_Y"] = "0"
 os.environ["MIN_MEAN_DWELL_S"] = "12"
+os.environ["MIN_STATIONARY_AVATARS"] = "5"
+# The 15 s fixtures need the full dwell inside one window: a tuned short window
+# (e.g. the live-queue 10 s profile in .env) would cap dwell below the assert.
+os.environ["WINDOW_DURATION"] = "30 seconds"
+os.environ["WINDOW_SLIDE"] = "10 seconds"
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "pipeline"))
 

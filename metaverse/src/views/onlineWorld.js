@@ -99,7 +99,9 @@ export function createOnlineWorld(canvas, { initialMode = '2d', onHud = null, hi
         const z1 = Math.min(CFG.ZONE_ORIGIN_Z + (zz + 1) * CFG.ZONE_CELL, zMax)
         const mesh = new THREE.Mesh(
           new THREE.PlaneGeometry((x1 - x0) * 0.94, (z1 - z0) * 0.94),
-          new THREE.MeshBasicMaterial({ color: 0xf87171, transparent: true, opacity: 0.22, depthWrite: false })
+          // Opacity 0.35: at 0.22 the plane barely read against the dark ground,
+          // and users missed active red zones entirely in the 2D view.
+          new THREE.MeshBasicMaterial({ color: 0xf87171, transparent: true, opacity: 0.35, depthWrite: false })
         )
         mesh.rotation.x = -Math.PI / 2
         mesh.position.set((x0 + x1) / 2, 0.5, (z0 + z1) / 2)
