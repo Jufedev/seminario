@@ -31,14 +31,14 @@ Navegador (cliente delgado)        Servidor autoritativo (Node/bun)        Spark
 
 El servidor muestrea posiciones por avatar a **1 Hz** y las produce a
 `avatar-positions`. Spark detecta y emite a `red-points`. El `RedPointStore` del
-servidor consume `red-points`, mapea el centro a una zona 6×6 y el servidor la
+servidor consume `red-points`, mapea el centro a una zona de la grilla 16×13 y la
 propaga a los navegadores en el campo `rz` del `world_snapshot`, penalizando
 aristas y recalculando rutas de los avatares en camino.
 
 ## Ruta rápida (loop completo en local, dentro del distrobox)
 
 1. `make kafka-start` — broker Kafka en `localhost:9092`
-2. `make detector` — detector Spark, `CELL_SIZE=75` por defecto (terminal 1)
+2. `make detector` — detector Spark, celdas de 30×30 ancladas en `(-240,-195)` (terminal 1)
 3. `make metaverse-server` — servidor autoritativo + puente Kafka (terminal 2)
 4. `make metaverse-web` — cliente del navegador (Vite vía bun) (terminal 3)
 5. Abrir el navegador, crear/entrar a una sala e iniciar la simulación
@@ -55,7 +55,7 @@ aristas y recalculando rutas de los avatares en camino.
 | Topic | Transporte | Productor | Consumidor | Contenido |
 |---|---|---|---|---|
 | `avatar-positions` | Kafka | servidor metaverso | detector Spark | Posición por avatar, ~1 msg/s por avatar |
-| `red-points` | Kafka | detector Spark | servidor metaverso (`RedPointStore`) | Celdas con ≥ N avatares detenidos |
+| `red-points` | Kafka | detector Spark | servidor metaverso (`RedPointStore`) | Celdas con ≥ N avatares detenidos con permanencia media ≥ `MIN_MEAN_DWELL_S` |
 
 Los demás topics del metaverso (`agent.spawn`, `agent.reroute`, `agent.arrived`,
 `incident.start/end`, `route.decision`, `analytics.snapshot`, …) son internos de
@@ -112,14 +112,23 @@ lleva la sala en la que se detectó (null en mensajes legacy sin envelope). La
   "cell_x": -3, "cell_y": 2,
   "center_x": -187.50, "center_y": 150.00,
   "stationary_avatars": 7,
+  "mean_dwell_s": 18.4,
   "window_start": "2026-07-07 12:00:00",
-  "window_end": "2026-07-07 12:01:00"
+  "window_end": "2026-07-07 12:00:30"
 }
 ```
 
+Semántica de detección: una celda es punto rojo cuando en la ventana deslizante
+de 30 s hay ≥ `MIN_STATIONARY_AVATARS` avatares distintos con `speed < 0.5` **y**
+la permanencia media (`mean_dwell_s` = muestras detenidas por avatar ≈ segundos
+a 1 Hz) alcanza `MIN_MEAN_DWELL_S` (default 12 s). El requisito de permanencia
+distingue congestión real de frenadas de semáforo (fases de 8 s): sin él, el
+conteo de avatares distintos — monotónico dentro de la ventana — convertía
+cualquier semáforo con flujo normal en zona roja permanente.
+
 El servidor (`metaverse/analytics/redPoints.js`) usa solo `center_x`/`center_y`:
-`zoneIndexAt(center_x, center_y)` → índice de zona 6×6 (0..35) para el overlay.
-Mantiene un mapa zona→expiración con **TTL de 30 s**, refrescado por las
+`zoneIndexAt(center_x, center_y)` → índice de zona 16×13 (0..207) para el overlay.
+Mantiene un mapa zona→expiración con **TTL de 15 s**, refrescado por las
 re-emisiones de Spark (modo `update`).
 
 ## Mapeo de coordenadas y CELL_SIZE
@@ -129,13 +138,14 @@ re-emisiones de Spark (modo `update`).
   detector.
 - Límites del mapa (`metaverse/src/graph/mapData.js`, `MAP_BOUNDS`):
   x ∈ [−225, 225] (450 unidades), z ∈ [−180, 180] (360 unidades).
-- **`CELL_SIZE=75` por defecto**: 450 / 75 = 6 columnas, alineando la
-  granularidad de detección con la grilla 6×6 del overlay (`zones.js`). Es una
-  variable de entorno del detector — no está fija en código.
+- **`CELL_SIZE_X=30`, `CELL_SIZE_Y=30`, ancladas en `(-240,-195)`** (defaults de
+  `make dev`/`make detector`): la MISMA grilla 16×13 del overlay del metaverso
+  (`metaverse/src/analytics/config.js`), anclada a mitad de manzana para que
+  ningún eje de vía caiga sobre un borde de celda. Son variables de entorno del
+  detector — no están fijas en código.
 - El `RedPointStore` no depende de `CELL_SIZE`: mapea el `center_x`/`center_y`
-  que envía Spark a la zona 6×6 que lo contiene vía `zoneIndexAt`, es decir pinta
-  la zona contenedora (aproximación documentada; trabajo futuro: pintar la celda
-  exacta).
+  que envía Spark a la zona 16×13 que lo contiene vía `zoneIndexAt`. Con la
+  grilla espejada, celda del detector y zona del overlay coinciden 1:1.
 
 ## Correlación con salas (rooms)
 
@@ -160,10 +170,11 @@ los puntos rojos por sala se particionen distinto.
 |---|---|---|---|
 | Detector y metaverso | `KAFKA_BOOTSTRAP` | `localhost:9092` | Broker Kafka (o `<ns>.servicebus.windows.net:9093` en Azure) |
 | Detector y metaverso | `EVENTHUBS_CONNECTION_STRING` | (vacío) | Si se define → SASL_SSL / `$ConnectionString` contra Event Hubs |
-| Detector | `CELL_SIZE` | `75` (`make detector`) | Tamaño de celda del grid |
+| Detector | `CELL_SIZE_X` / `CELL_SIZE_Y` | `30` / `30` (`make detector`) | Tamaño de celda del grid (espejo del overlay 16×13) |
 | Detector | `SPEED_THRESHOLD` | `0.5` | Velocidad (m/s) bajo la cual un avatar cuenta como detenido |
 | Detector | `MIN_STATIONARY_AVATARS` | `5` | Avatares detenidos para declarar punto rojo |
-| Detector | `WINDOW_DURATION` / `WINDOW_SLIDE` | `60s` / `10s` | Ventana deslizante |
+| Detector | `MIN_MEAN_DWELL_S` | `12` | Permanencia media mínima (s) por avatar en la ventana; debe superar la fase de semáforo (8 s) para excluir frenadas normales |
+| Detector | `WINDOW_DURATION` / `WINDOW_SLIDE` | `30s` / `10s` | Ventana deslizante (variable experimental de H1) |
 | Detector | `ARCHIVE_PATH` | (vacío) | Si se define → archiva `avatar-positions` parseado a Parquet (dir local en dev, `abfss://…` ADLS en prod); vacío = desactivado |
 
 Los perfiles listos están en `env/env.dev.example` y `env/env.prod.example`

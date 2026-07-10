@@ -73,7 +73,7 @@ export function renderAdminView(app) {
           <div id="d-rank" style="font-size:11px;color:var(--text-dim);margin-top:6px">—</div>
         </div>
         <div class="dash-card">
-          <h4>Mapa de calor 8×7 · <span id="d-critical" style="text-transform:none">—</span></h4>
+          <h4>Mapa de calor de zonas · <span id="d-critical" style="text-transform:none">—</span></h4>
           <canvas id="d-heatmap" class="dash-heatmap"></canvas>
           <h4 style="margin-top:8px">Velocidad (azul) · zonas rojas (rojo)</h4>
           <canvas id="d-spark" style="width:100%;height:56px"></canvas>
@@ -206,7 +206,7 @@ export function renderAdminView(app) {
     view.querySelector('#d-arrived').textContent = m.global.arrived
     view.querySelector('#d-speed').textContent = m.global.avgSpeed ?? '—'
     view.querySelector('#d-c').textContent = m.global.avgC ?? '—'
-    // Zonas rojas del detector Spark (índices de celda 8×7 activos), NO el contador
+    // Zonas rojas del detector Spark (índices de celda activos), NO el contador
     // muerto del ZoneSystem interno (m.global.redZones, siempre 0 con la detección off).
     const sparkRed = m.sparkRedZones ?? []
     view.querySelector('#d-red').textContent = sparkRed.length

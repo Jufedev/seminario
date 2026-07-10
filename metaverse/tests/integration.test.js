@@ -10,7 +10,7 @@ import { GRID_COLS, GRID_ROWS, zoneIndexAt } from '../server/zoneGrid.js'
 import { RedPointStore } from '../analytics/redPoints.js'
 
 const UNIT_TO_METERS = 4
-const LAST_CELL = GRID_COLS * GRID_ROWS - 1 // 55
+const LAST_CELL = GRID_COLS * GRID_ROWS - 1 // 207
 
 describe('measuredSpeedMps (propiedad crítica de la tesis)', () => {
   test('sin desplazamiento → 0 m/s (auto encolado / detenido)', () => {
@@ -33,9 +33,9 @@ describe('measuredSpeedMps (propiedad crítica de la tesis)', () => {
 })
 
 describe('zoneIndexAt (coords de mundo → celda del overlay, grilla a mitad de manzana)', () => {
-  test('la grilla es 8×7', () => {
-    expect(GRID_COLS).toBe(8)
-    expect(GRID_ROWS).toBe(7)
+  test('la grilla es 16×13', () => {
+    expect(GRID_COLS).toBe(16)
+    expect(GRID_ROWS).toBe(13)
   })
 
   test('las esquinas del mapa mapean a la primera y última celda', () => {
@@ -75,12 +75,18 @@ describe('zoneIndexAt (coords de mundo → celda del overlay, grilla a mitad de 
     }
   })
 
-  test('una manzana completa con sus 4 esquinas vive en una sola celda', () => {
-    // Manzana Cra30/Cra28 × Cl57/Cl56: esquinas (-225,-180) (-195,-180) (-225,-150) (-195,-150)
-    const cell = zoneIndexAt(-225, -180)
-    expect(zoneIndexAt(-195, -180)).toBe(cell)
-    expect(zoneIndexAt(-225, -150)).toBe(cell)
-    expect(zoneIndexAt(-195, -150)).toBe(cell)
+  test('cada intersección vive centrada en su celda con sus 4 medias calles', () => {
+    // Con celdas de 30 (1 cuadra) la unidad ya no es la manzana sino la
+    // INTERSECCIÓN: todo punto a menos de media cuadra de una esquina cae en
+    // la celda de esa esquina. Intersección Cra25 × Cl52: (-105, -30).
+    const cell = zoneIndexAt(-105, -30)
+    expect(zoneIndexAt(-105 - 14, -30)).toBe(cell)   // media calle al oeste
+    expect(zoneIndexAt(-105 + 14, -30)).toBe(cell)   // media calle al este
+    expect(zoneIndexAt(-105, -30 - 14)).toBe(cell)   // media calle al norte
+    expect(zoneIndexAt(-105, -30 + 14)).toBe(cell)   // media calle al sur
+    // Y las intersecciones vecinas (a 1 cuadra) caen en celdas DISTINTAS.
+    expect(zoneIndexAt(-75, -30)).not.toBe(cell)
+    expect(zoneIndexAt(-105, 0)).not.toBe(cell)
   })
 })
 

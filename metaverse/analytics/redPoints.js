@@ -3,8 +3,9 @@
 //  de las ZONAS ROJAS es el detector Big Data de Spark, NO la analítica
 //  interna del metaverso. Este store lee el topic `red-points` (salida
 //  del job pipeline/red_point_detector.py), traduce el centro de cada
-//  celda al índice de zona 8×7 del metaverso y mantiene el conjunto de
-//  zonas rojas ACTIVAS con TTL.
+//  celda al índice de la grilla de zonas del metaverso (dimensiones en
+//  src/analytics/config.js) y mantiene el conjunto de zonas rojas
+//  ACTIVAS con TTL.
 //
 //  Correlación de sala: Spark ahora emite cada red-point con un campo
 //  `room` (el código de sala parseado del avatar_id). Las zonas rojas se
@@ -23,9 +24,9 @@ import { zoneIndexAt } from '../server/zoneGrid.js'
 export const RED_POINTS_TOPIC = 'red-points'
 
 // Spark re-emite cada celda roja en cada slide de la ventana (~10s, modo
-// "update"). 30s de TTL sobrevive a un par de slides perdidos antes de apagar
-// una zona que ya no se re-emite.
-const TTL_MS = 30_000
+// "update"). 15s de TTL sobrevive a un slide perdido antes de apagar una
+// zona que ya no se re-emite, y apaga rápido las zonas ya despejadas.
+const TTL_MS = 15_000
 
 // Clave para red-points sin sala atribuible: sus zonas las ven TODAS las salas.
 export const GLOBAL_ROOM_KEY = '__global__'
@@ -33,7 +34,7 @@ export const GLOBAL_ROOM_KEY = '__global__'
 export class RedPointStore {
   constructor({ bridge } = {}) {
     this.bridge = bridge
-    // Zonas rojas POR SALA: roomKey → Map<índice de zona 8×7, epoch ms de expiración>.
+    // Zonas rojas POR SALA: roomKey → Map<índice de zona, epoch ms de expiración>.
     // La clave GLOBAL_ROOM_KEY agrupa los red-points sin sala (los ven todas).
     this.zones = new Map()
     this.mode = 'local'
@@ -92,12 +93,12 @@ export class RedPointStore {
     console.log('[redpoints] modo local (sin Spark: no habrá zonas rojas hasta conectar el detector)')
   }
 
-  // Un red-point de Spark → refresca el TTL de su zona 8×7 bajo la sala del evento.
+  // Un red-point de Spark → refresca el TTL de su zona bajo la sala del evento.
   _ingest(e) {
     this.consumed++
     // Spark emite center_x/center_y en las MISMAS coords de mundo que le
     // mandamos como x/y (three.js posX→x, posZ→y). Mapear el centro de la
-    // celda de vuelta al índice de zona 8×7 del metaverso.
+    // celda de vuelta al índice de la grilla de zonas del metaverso.
     const cx = Number(e.center_x), cy = Number(e.center_y)
     if (!Number.isFinite(cx) || !Number.isFinite(cy)) return
     const zone = zoneIndexAt(cx, cy)

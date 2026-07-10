@@ -2,17 +2,20 @@
 //  CONFIG — parámetros de la analítica por zonas (Fase 3)
 // ════════════════════════════════════════════════════════════════
 export const ANALYTICS_CONFIG = {
-  // Cuadrícula de zonas anclada a MITAD DE MANZANA: celdas de 60×60 unidades
-  // con origen en (-240,-195) → 8 columnas × 7 filas = 56 zonas. Las vías van
-  // cada 30 unidades (calles en z múltiplo de 30, carreras en x ≡ 15 mod 30),
-  // así que ningún borde de celda cae sobre una vía: cada zona contiene UNA
-  // manzana completa con sus cuatro calles enteras adentro. Una cola sobre una
-  // calle nunca se parte entre dos zonas (ni en la detección de Spark, ni en
-  // el overlay, ni en las penalizaciones de Dijkstra). El detector debe usar
-  // la MISMA grilla (CELL_SIZE_X/Y y GRID_ORIGIN_X/Y del .env).
-  GRID_COLS: 8,
-  GRID_ROWS: 7,
-  ZONE_CELL: 60,               // lado de la celda (unidades de mundo) = 2 cuadras
+  // Cuadrícula de zonas anclada a MITAD DE MANZANA: celdas de 30×30 unidades
+  // con origen en (-240,-195) → 16 columnas × 13 filas = 208 zonas. Las vías
+  // van cada 30 unidades (calles en z múltiplo de 30, carreras en x ≡ 15 mod
+  // 30) y los bordes de celda caen en x ≡ 0 mod 30 / z ≡ 15 mod 30, así que
+  // ningún EJE de vía cae sobre un borde: cada zona contiene UNA intersección
+  // centrada con sus cuatro medias calles. Los dos carriles de una cola nunca
+  // se parten entre dos zonas a lo ancho de la vía (ni en la detección de
+  // Spark, ni en el overlay, ni en las penalizaciones de Dijkstra). El
+  // detector debe usar la MISMA grilla (CELL_SIZE_X/Y y GRID_ORIGIN_X/Y del
+  // .env). Cobertura: X ∈ [-240,240) y Z ∈ [-195,195) ⊇ mapa (-225..225,
+  // -180..180).
+  GRID_COLS: 16,
+  GRID_ROWS: 13,
+  ZONE_CELL: 30,               // lado de la celda (unidades de mundo) = 1 cuadra
   ZONE_ORIGIN_X: -240,         // esquina de la grilla, media manzana antes del mapa
   ZONE_ORIGIN_Z: -195,
   ZONE_WINDOW_S: 1,             // ventana de recálculo por zona (no cada frame)

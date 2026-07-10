@@ -23,6 +23,8 @@ from pathlib import Path
 # CELL_SIZE is read at import time by the detector module; pin it (hard set, so an
 # exported value can't win) to keep the cell math deterministic regardless of env.
 os.environ["CELL_SIZE"] = "100"
+# Same for the dwell filter: the fixture's 15 samples/avatar assume the default.
+os.environ["MIN_MEAN_DWELL_S"] = "12"
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "pipeline"))
 
@@ -39,21 +41,24 @@ def iso_z(dt):
 
 
 def raw_value_rows():
-    """Six avatars stopped in the same cell, three samples each, 10 s apart.
+    """Six avatars stopped in the same cell, 15 samples each at 1 Hz.
 
-    Emitted as raw JSON strings in a `value` column — exactly the shape the Kafka
-    source hands to parse_positions(). avatar_id uses the real
-    `${room}-${epoch}-${index}` format so any accidental coupling would surface.
+    The 1 Hz cadence mirrors the production emit rate, and 15 samples per avatar
+    clears the detector's mean-dwell filter (MIN_MEAN_DWELL_S=12, which exists to
+    exclude short traffic-light stops). Emitted as raw JSON strings in a `value`
+    column — exactly the shape the Kafka source hands to parse_positions().
+    avatar_id uses the real `${room}-${epoch}-${index}` format so any accidental
+    coupling would surface.
     """
     rows = []
     for avatar in range(6):
-        for sample in range(3):
+        for sample in range(15):
             event = {
                 "avatar_id": f"ECCI-1234-7-{avatar}",
                 "x": -104.5,
                 "y": 152.0,
                 "speed": 0.1,
-                "ts": iso_z(BASE_TIME + timedelta(seconds=10 * sample)),
+                "ts": iso_z(BASE_TIME + timedelta(seconds=sample)),
                 "room": "ECCI-1234",  # injected by the Node bridge envelope
             }
             rows.append((json.dumps(event),))

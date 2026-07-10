@@ -9,7 +9,8 @@ set EVENTHUBS_CONNECTION_STRING to switch to Azure.
 
 Input  topic (avatar-positions): {"avatar_id","x","y","speed","ts","room"}
 Output topic (red-points):       {"room","cell_x","cell_y","center_x","center_y",
-                                  "stationary_avatars","window_start","window_end"}
+                                  "stationary_avatars","mean_dwell_s",
+                                  "window_start","window_end"}
 """
 
 import os
@@ -29,15 +30,24 @@ CHECKPOINT_DIR = os.getenv("CHECKPOINT_DIR", "./checkpoints/red-point-detector")
 ARCHIVE_PATH = os.getenv("ARCHIVE_PATH", "")
 
 # Detection parameters — these are the tunable knobs of the hypothesis:
-# a red point = at least MIN_STATIONARY_AVATARS with speed below
-# SPEED_THRESHOLD inside the same grid cell, observed within a
-# WINDOW_DURATION sliding window.
+# a red point = at least MIN_STATIONARY_AVATARS distinct avatars below
+# SPEED_THRESHOLD inside the same grid cell within a WINDOW_DURATION sliding
+# window, AND a mean dwell of at least MIN_MEAN_DWELL_S seconds per avatar.
+#
+# The dwell requirement is what separates congestion from traffic lights: the
+# distinct-avatar count is cumulative and monotonic within a window (it never
+# decreases once a car has stopped there), so on its own it matches any
+# intersection where 5 different cars briefly braked — i.e. every normal
+# red-light cycle. Requiring the avatars to STAY stopped (samples ≈ seconds
+# at the 1 Hz emit rate) excludes short light stops and flags only traffic
+# that is genuinely stuck.
 #
 # The grid is defined per axis and anchored at an origin so it can tile the
-# consumer's zone overlay exactly (the metaverse map is 450x360 units starting
-# at (-225,-180): 6x6 zones of 75x60). A misaligned grid (square cells anchored
-# at 0) makes each cell straddle two zone rows, so red zones light up next to
-# the congestion instead of on it. CELL_SIZE is the square-cell fallback.
+# consumer's zone overlay exactly (metaverse/src/analytics/config.js: 30x30
+# cells anchored mid-block at (-240,-195), 16x13 zones). A misaligned grid
+# (square cells anchored at 0) makes each cell straddle two zone rows, so red
+# zones light up next to the congestion instead of on it. CELL_SIZE is the
+# square-cell fallback.
 CELL_SIZE = float(os.getenv("CELL_SIZE", "100"))
 CELL_SIZE_X = float(os.getenv("CELL_SIZE_X", str(CELL_SIZE)))
 CELL_SIZE_Y = float(os.getenv("CELL_SIZE_Y", str(CELL_SIZE)))
@@ -45,7 +55,14 @@ GRID_ORIGIN_X = float(os.getenv("GRID_ORIGIN_X", "0"))
 GRID_ORIGIN_Y = float(os.getenv("GRID_ORIGIN_Y", "0"))
 SPEED_THRESHOLD = float(os.getenv("SPEED_THRESHOLD", "0.5"))
 MIN_STATIONARY_AVATARS = int(os.getenv("MIN_STATIONARY_AVATARS", "5"))
-WINDOW_DURATION = os.getenv("WINDOW_DURATION", "60 seconds")
+# Avatars emit at 1 Hz, so stationary samples per avatar ≈ seconds stopped.
+# Must exceed the simulator's 8 s traffic-light phase (LIGHT_PERIOD) so a
+# normal light stop can never qualify — only genuinely stuck traffic does.
+MIN_MEAN_DWELL_S = float(os.getenv("MIN_MEAN_DWELL_S", "12"))
+# WINDOW_DURATION is the H1 experimental variable: it trades detection
+# stability for how fast a cleared street stops re-emitting (worst case
+# ~window + TTL after the congestion dissolves).
+WINDOW_DURATION = os.getenv("WINDOW_DURATION", "30 seconds")
 WINDOW_SLIDE = os.getenv("WINDOW_SLIDE", "10 seconds")
 WATERMARK_DELAY = os.getenv("WATERMARK_DELAY", "30 seconds")
 
@@ -107,8 +124,11 @@ def detect_red_points(
 
     Takes a DataFrame with (avatar_id, x, y, speed, event_time, room) and
     returns one row per (window, room, cell) where at least
-    MIN_STATIONARY_AVATARS distinct avatars were below SPEED_THRESHOLD.
-    Grouping by room keeps simultaneous rooms from pooling their congestion;
+    MIN_STATIONARY_AVATARS distinct avatars were below SPEED_THRESHOLD *and*
+    stayed there: the mean dwell (stationary samples per avatar, ≈ seconds at
+    the 1 Hz emit rate) must reach MIN_MEAN_DWELL_S, which excludes brief
+    traffic-light stops. Grouping by room keeps simultaneous rooms from
+    pooling their congestion;
     a null room (legacy messages) forms one group. Works on both streaming and
     batch DataFrames (the watermark is ignored in batch), which is what makes
     the logic unit-testable without Kafka.
@@ -129,8 +149,19 @@ def detect_red_points(
             F.floor((F.col("x") - ox) / csx).alias("cell_x"),
             F.floor((F.col("y") - oy) / csy).alias("cell_y"),
         )
-        .agg(F.approx_count_distinct("avatar_id").alias("stationary_avatars"))
+        .agg(
+            F.approx_count_distinct("avatar_id").alias("stationary_avatars"),
+            F.count("*").alias("stationary_samples"),
+        )
         .filter(F.col("stationary_avatars") >= MIN_STATIONARY_AVATARS)
+        .filter(
+            (F.col("stationary_samples") / F.col("stationary_avatars"))
+            >= MIN_MEAN_DWELL_S
+        )
+        .withColumn(
+            "mean_dwell_s",
+            F.round(F.col("stationary_samples") / F.col("stationary_avatars"), 1),
+        )
     )
 
 
@@ -168,6 +199,7 @@ def main() -> None:
                 ((F.col("cell_x") + 0.5) * CELL_SIZE_X + GRID_ORIGIN_X).alias("center_x"),
                 ((F.col("cell_y") + 0.5) * CELL_SIZE_Y + GRID_ORIGIN_Y).alias("center_y"),
                 F.col("stationary_avatars"),
+                F.col("mean_dwell_s"),
                 F.col("w.start").cast("string").alias("window_start"),
                 F.col("w.end").cast("string").alias("window_end"),
             )
@@ -191,6 +223,7 @@ def main() -> None:
         f"Red-point detector running: {INPUT_TOPIC} -> {OUTPUT_TOPIC} "
         f"(cell={CELL_SIZE_X}x{CELL_SIZE_Y} @ ({GRID_ORIGIN_X},{GRID_ORIGIN_Y}), "
         f"min_avatars={MIN_STATIONARY_AVATARS}, "
+        f"min_mean_dwell={MIN_MEAN_DWELL_S}s, "
         f"window={WINDOW_DURATION}, slide={WINDOW_SLIDE})"
     )
 

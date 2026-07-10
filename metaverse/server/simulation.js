@@ -37,7 +37,11 @@ const OFFER_COOLDOWN_MS = 15000 // tras decidir, no re-ofertar al mismo vehícul
 const ALERT_AFTER_MS = 15000   // ruta configurada sin invocar el personal → alerta al admin
 
 const POS_SAMPLE_S = 1         // cadencia del feed por-avatar hacia Spark (avatar-positions): ~1 Hz, NO 20 Hz
-const SPARK_ZONE_PENALTY = 40  // penalización a Dijkstra por arista de una zona roja de Spark (~edge weight ⇒ se evita)
+// Penalización a Dijkstra por arista de una zona roja de Spark. El peso de una
+// arista es su distancia euclídea (~30 por cuadra): con 40 cruzar la zona
+// costaba apenas ~1 cuadra extra y Dijkstra seguía atravesándola. Con 500
+// cualquier desvío realista es más barato que cruzar.
+const SPARK_ZONE_PENALTY = 500
 
 const clamp = (v, [lo, hi], fallback) => {
   const n = Number(v)
@@ -65,7 +69,7 @@ export class Simulation {
       agentSystem: this.agents, graphEdges: allEdges(),
       frequencySec: this.incidentFreq, headless: true, graphState: this.graphState,
     })
-    // M5: la analítica de zonas 8×7 (índice C, zonas rojas) corre en el servidor
+    // M5: la analítica de zonas (índice C, zonas rojas; grilla de config.js) corre en el servidor
     this.zones = new ZoneSystem(fakeScene, {
       agentSystem: this.agents, incidentManager: this.incidents,
       headless: true, graphState: this.graphState,
@@ -95,7 +99,7 @@ export class Simulation {
 
     // ── Zonas rojas provenientes de SPARK (topic red-points) — fuente de verdad ──
     // Reemplazan a la detección interna de ZoneSystem para el overlay (rz) y el
-    // reruteo. Índices de zona 8×7 + unión de sus node ids (para la caché de rutas).
+    // reruteo. Índices de zona de la grilla + unión de sus node ids (para la caché de rutas).
     this._sparkRedZones = new Set()
     this._sparkRedNodeIds = new Set()
 
@@ -464,7 +468,7 @@ export class Simulation {
       if (!as.active[i]) continue
       a.push(i, r2(as.posX[i]), r2(as.posZ[i]), r2(as.heading[i]), as.state[i], as.owner[i])
     }
-    // zonas rojas activas → overlay en los clientes (índices de celda 8×7).
+    // zonas rojas activas → overlay en los clientes (índices de celda de la grilla).
     // FUENTE: detector Spark (red-points), NO ZoneSystem (ver applySparkRedZones).
     const rz = [...this._sparkRedZones]
     return {

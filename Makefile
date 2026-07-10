@@ -17,10 +17,10 @@ PYTHON := $(VENV)/bin/python
 PIP := $(VENV)/bin/pip
 KAFKA := ./scripts/kafka-local.sh
 TOPIC ?= red-points
-# Detector grid defaults — must match the metaverse zone overlay: 60x60 cells
+# Detector grid defaults — must match the metaverse zone overlay: 30x30 cells
 # anchored mid-block at (-240,-195) (see env/env.dev.example).
-CELL_SIZE_X ?= 60
-CELL_SIZE_Y ?= 60
+CELL_SIZE_X ?= 30
+CELL_SIZE_Y ?= 30
 GRID_ORIGIN_X ?= -240
 GRID_ORIGIN_Y ?= -195
 
