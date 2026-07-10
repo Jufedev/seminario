@@ -195,12 +195,13 @@ Los perfiles listos están en `env/env.dev.example` y `env/env.prod.example`
 - [ ] `make consume TOPIC=avatar-positions` muestra el esquema del pipeline (un mensaje por avatar)
 - [ ] Con una congestión formada, `make consume TOPIC=red-points` muestra el punto rojo y la zona se pinta en el navegador con recálculo de rutas
 
-## Trabajo futuro
-
-- Re-alimentar el heatmap del panel de administración desde `red-points` (hoy el
-  heatmap interno quedó en 0 al desconectar `zones.update`).
-
 ### Hecho
+
+- ✅ **Dashboard del admin re-alimentado**: `ZoneSystem` corre en modo
+  `metricsOnly` (calcula el índice C y emite `analytics.snapshot` sin penalizar,
+  rerutear ni emitir `zone.red/clear`) → heatmap de C, C̄ global y zona crítica
+  vivos de nuevo. El KPI y la serie de zonas rojas salen del conteo del
+  `RedPointStore` (detector Spark), coherentes con el overlay de los clientes.
 
 - ✅ **Detección por sala**: el detector agrupa por `(room, celda)` y `red-points`
   lleva `room` (salas simultáneas ya no mezclan congestión).

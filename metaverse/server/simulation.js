@@ -69,10 +69,13 @@ export class Simulation {
       agentSystem: this.agents, graphEdges: allEdges(),
       frequencySec: this.incidentFreq, headless: true, graphState: this.graphState,
     })
-    // M5: la analítica de zonas (índice C, zonas rojas; grilla de config.js) corre en el servidor
+    // M5: la analítica de zonas (índice C; grilla de config.js) corre en el servidor
+    // en modo SOLO MÉTRICAS: emite analytics.snapshot para el dashboard del admin
+    // (heatmap de C, C̄ global, zona crítica) pero jamás penaliza ni rerutea —
+    // la detección de zonas rojas es exclusiva del pipeline Spark.
     this.zones = new ZoneSystem(fakeScene, {
       agentSystem: this.agents, incidentManager: this.incidents,
-      headless: true, graphState: this.graphState,
+      headless: true, metricsOnly: true, graphState: this.graphState,
     })
     this.routesByUser = new Map()   // slot → {origin, dest, optimal_m} (para sim_info y eficiencia)
 
@@ -318,7 +321,7 @@ export class Simulation {
     this.zones.dispose()
     this.zones = new ZoneSystem(fakeScene, {
       agentSystem: this.agents, incidentManager: this.incidents,
-      headless: true, graphState: this.graphState,
+      headless: true, metricsOnly: true, graphState: this.graphState,
     })
     this.pendingOffers.clear()
     this.offerCooldownUntil.clear()
@@ -349,13 +352,12 @@ export class Simulation {
     this.traffic.update(dt)
     this.agents.update(dt, this.time)
     this.incidents.update(dt, this.time)
-    // DESCONECTADO: la detección interna de ZoneSystem (índice C → zona roja,
-    // reruteo y penalizaciones, más su evento analytics.snapshot) queda
-    // SUPERSEDIDA por el detector Big Data de Spark (topic red-points). El
-    // código de ZoneSystem se conserva intacto y su geometría de zonas
-    // (zoneEdges/zoneNodeIds) se reutiliza en applySparkRedZones(), pero su
-    // bucle de detección ya NO se avanza: overlay (rz) y reruteo vienen de Spark.
-    // this.zones.update(dt, this.time)
+    // ZoneSystem corre en modo SOLO MÉTRICAS (ver constructor): alimenta el
+    // dashboard del admin (analytics.snapshot: heatmap de C, C̄, zona crítica)
+    // sin tocar el grafo. La DETECCIÓN de zonas rojas — overlay (rz), reruteo y
+    // penalizaciones — sigue siendo exclusiva del detector Spark (red-points),
+    // aplicada en applySparkRedZones() sobre la geometría de zonas compartida.
+    this.zones.update(dt, this.time)
     this._alertAcc += dt
     if (this._alertAcc >= 1) { this._alertAcc = 0; this._checkInvokeAlerts() }
   }

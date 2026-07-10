@@ -155,11 +155,12 @@ setInterval(() => {
 // ── Emisión de analítica por rol (cada ~1s): el consumidor agrega, el server reparte ──
 setInterval(() => {
   for (const room of rooms.all()) {
+    // Zonas rojas del detector Spark (fuente de verdad): alimentan el KPI y la
+    // serie roja del consumidor ANTES de armar las métricas, y el heatmap del admin.
+    const sparkRedZones = redStore.activeZonesFor(room.code)
+    analytics.noteSparkRedZones(room.code, sparkRedZones.length)
     if (room.admin) {
       const metrics = analytics.metricsForAdmin(room.code)
-      // Zonas rojas del detector Spark para el heatmap del admin (la detección
-      // interna de ZoneSystem está desconectada: Spark es el detector de registro).
-      const sparkRedZones = redStore.activeZonesFor(room.code)
       if (metrics) send(room.admin, { type: 'admin_analytics', ...metrics, sparkRedZones })
     }
     for (let slot = 1; slot <= 3; slot++) {

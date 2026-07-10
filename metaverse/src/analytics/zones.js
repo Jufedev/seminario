@@ -22,11 +22,15 @@ import { ANALYTICS_CONFIG as CFG } from './config.js'
 export class ZoneSystem {
   // headless: en el servidor no hay overlay 3D (los clientes pintan desde el snapshot);
   // graphState: penalizaciones sobre el estado de la sala, no el global compartido.
-  constructor(scene, { agentSystem, incidentManager, headless = false, graphState = DEFAULT_EDGE_STATE }) {
+  // metricsOnly: calcula C y emite analytics.snapshot pero NUNCA actúa sobre el
+  // grafo (sin penalizaciones, reruteos ni zone.red/clear) — el detector de
+  // registro es Spark y este sistema queda como telemetría del dashboard.
+  constructor(scene, { agentSystem, incidentManager, headless = false, metricsOnly = false, graphState = DEFAULT_EDGE_STATE }) {
     this.scene = scene
     this.agentSystem = agentSystem
     this.incidentManager = incidentManager
     this.headless = headless
+    this.metricsOnly = metricsOnly
     this.graphState = graphState
 
     this.cfg = CFG   // expuesto para lectura/depuración en vivo (window.__DEBUG_SIM.zoneSystem.cfg)
@@ -46,8 +50,12 @@ export class ZoneSystem {
     this._acc = 0
     this._redNodeIds = new Set()
 
-    // Conecta esta analítica con el motor de avatares (caché de rutas por instancia)
-    this.agentSystem.setRedZoneChecker(path => path.some(nodeId => this._redNodeIds.has(nodeId)))
+    // Conecta esta analítica con el motor de avatares (caché de rutas por instancia).
+    // En metricsOnly NO se registra: el checker vigente es el de las zonas de Spark
+    // (ver simulation._installSparkRedChecker) y este no debe pisarlo ni un tick.
+    if (!this.metricsOnly) {
+      this.agentSystem.setRedZoneChecker(path => path.some(nodeId => this._redNodeIds.has(nodeId)))
+    }
   }
 
   // ── Índice de zona a partir de coordenadas de mundo (x,z) ──
@@ -156,17 +164,21 @@ export class ZoneSystem {
       const wasRed = this.isRed[z] === 1
       // Roja por índice C o por la regla directa de aglomeración (> ZONE_RED_AVATARS en la celda)
       const nowRed = C >= CFG.C_RED_THRESHOLD || counts[z] > CFG.ZONE_RED_AVATARS
-      if (nowRed && !wasRed) {
-        setEdgePenalty2(this.zoneEdges[z], CFG.ZONE_PENALTY_SCALE * C, this.graphState)
-        this.agentSystem.invalidateRoutesThroughZone(this.zoneNodeIds[z])
-        this.agentSystem.rerouteAgentsThroughZone(this.zoneNodeIds[z])
-        kafka.send('zone.red', { zone: z, C: +C.toFixed(2), density: +density.toFixed(2), ts: Date.now() })
-      } else if (!nowRed && wasRed) {
-        setEdgePenalty2(this.zoneEdges[z], 0, this.graphState)
-        kafka.send('zone.clear', { zone: z, ts: Date.now() })
-      } else if (nowRed) {
-        // sigue roja: actualiza la penalización si C cambió
-        setEdgePenalty2(this.zoneEdges[z], CFG.ZONE_PENALTY_SCALE * C, this.graphState)
+      // En metricsOnly la bandera isRed es solo informativa (viaja en el snapshot);
+      // actuar sobre el grafo o los agentes es EXCLUSIVO del detector Spark.
+      if (!this.metricsOnly) {
+        if (nowRed && !wasRed) {
+          setEdgePenalty2(this.zoneEdges[z], CFG.ZONE_PENALTY_SCALE * C, this.graphState)
+          this.agentSystem.invalidateRoutesThroughZone(this.zoneNodeIds[z])
+          this.agentSystem.rerouteAgentsThroughZone(this.zoneNodeIds[z])
+          kafka.send('zone.red', { zone: z, C: +C.toFixed(2), density: +density.toFixed(2), ts: Date.now() })
+        } else if (!nowRed && wasRed) {
+          setEdgePenalty2(this.zoneEdges[z], 0, this.graphState)
+          kafka.send('zone.clear', { zone: z, ts: Date.now() })
+        } else if (nowRed) {
+          // sigue roja: actualiza la penalización si C cambió
+          setEdgePenalty2(this.zoneEdges[z], CFG.ZONE_PENALTY_SCALE * C, this.graphState)
+        }
       }
       this.isRed[z] = nowRed ? 1 : 0
       if (nowRed) for (const id of this.zoneNodeIds[z]) redNodeIds.add(id)
@@ -221,8 +233,12 @@ export class ZoneSystem {
 
   dispose() {
     // Limpia la penalización de cualquier zona que siguiera roja al salir de la vista
-    // (mismo motivo que IncidentManager.dispose() — no dejar basura en el grafo compartido)
-    for (let z = 0; z < this.n; z++) if (this.isRed[z]) setEdgePenalty2(this.zoneEdges[z], 0, this.graphState)
+    // (mismo motivo que IncidentManager.dispose() — no dejar basura en el grafo compartido).
+    // En metricsOnly nunca se penalizó nada — y limpiar aquí BORRARÍA las
+    // penalizaciones de las zonas rojas de Spark que comparten el mismo estado.
+    if (!this.metricsOnly) {
+      for (let z = 0; z < this.n; z++) if (this.isRed[z]) setEdgePenalty2(this.zoneEdges[z], 0, this.graphState)
+    }
     this.planes?.forEach(p => { p.geometry.dispose(); p.material.dispose(); p.removeFromParent() })
   }
 }

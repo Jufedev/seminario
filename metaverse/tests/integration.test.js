@@ -8,6 +8,14 @@ import { EventEmitter } from 'node:events'
 import { measuredSpeedMps } from '../server/speed.js'
 import { GRID_COLS, GRID_ROWS, zoneIndexAt } from '../server/zoneGrid.js'
 import { RedPointStore } from '../analytics/redPoints.js'
+import { AnalyticsConsumer } from '../analytics/consumer.js'
+import { ZoneSystem } from '../src/analytics/zones.js'
+import { createEdgeState } from '../src/graph/mapData.js'
+import { kafka } from '../src/kafka/producer.js'
+
+// El producer simulado hace console.debug de cada evento; se silencia igual
+// que en server/index.js (los tests inspeccionan kafka.log, no la consola).
+console.debug = () => {}
 
 const UNIT_TO_METERS = 4
 const LAST_CELL = GRID_COLS * GRID_ROWS - 1 // 207
@@ -131,5 +139,111 @@ describe('RedPointStore (red-points de Spark → zonas activas por sala)', () =>
     store.zones.get('ECCI-1234').set(zone, Date.now() - 1) // forzar expiración
     expect(store.activeZonesFor('ECCI-1234')).not.toContain(zone)
     expect(store.zones.has('ECCI-1234')).toBe(false) // sala sin zonas vivas → se descarta
+  })
+})
+
+describe('ZoneSystem metricsOnly (telemetría del dashboard sin tocar el grafo)', () => {
+  const fakeScene = { add() {}, remove() {} }
+
+  // 25 avatares detenidos en la intersección (-105,-30): supera ZONE_RED_AVATARS
+  // (20) y su C cruza el umbral — condición de zona roja garantizada.
+  const CONGESTED = { x: -105, z: -30 }
+  const N = 25
+
+  function fakeAgents() {
+    const calls = { reroutes: 0, invalidations: 0, checkerSet: 0 }
+    return {
+      calls,
+      total: N,
+      active: new Uint8Array(N).fill(1),
+      state: new Uint8Array(N),                    // 0 = MOVING (no ARRIVED)
+      posX: new Float32Array(N).fill(CONGESTED.x),
+      posZ: new Float32Array(N).fill(CONGESTED.z),
+      speed: new Float32Array(N),                  // 0 → déficit de velocidad total
+      arrivedCount: 0,
+      setRedZoneChecker() { calls.checkerSet++ },
+      invalidateRoutesThroughZone() { calls.invalidations++ },
+      rerouteAgentsThroughZone() { calls.reroutes++ },
+      getStats: () => ({ active: N, stuck: 0, avgSpeedMps: 0 }),
+    }
+  }
+
+  const build = metricsOnly => {
+    const agents = fakeAgents()
+    const state = createEdgeState()
+    const zs = new ZoneSystem(fakeScene, {
+      agentSystem: agents, incidentManager: { active: [] },
+      headless: true, metricsOnly, graphState: state,
+    })
+    return { zs, agents, state }
+  }
+
+  test('calcula C y emite analytics.snapshot, pero NUNCA penaliza ni rerutea', () => {
+    const { zs, agents, state } = build(true)
+    const logBefore = kafka.log.length
+    zs._recompute(1)
+
+    const zone = zs.zoneIndexAt(CONGESTED.x, CONGESTED.z)
+    expect(zs.isRed[zone]).toBe(1)                    // la bandera informativa sí se calcula
+    expect(state.penalty.size).toBe(0)                // el grafo queda intacto
+    expect(agents.calls.reroutes).toBe(0)
+    expect(agents.calls.invalidations).toBe(0)
+    expect(agents.calls.checkerSet).toBe(0)           // no pisa el checker de Spark
+
+    const emitted = kafka.log.slice(logBefore)
+    const snapshot = emitted.find(e => e.topic === 'analytics.snapshot')
+    expect(snapshot).toBeDefined()
+    expect(snapshot.zones_C[zone]).toBeGreaterThan(0) // el heatmap recibe C real
+    expect(emitted.some(e => e.topic === 'zone.red')).toBe(false)
+  })
+
+  test('control: el modo normal SÍ penaliza y emite zone.red (el flag hace la diferencia)', () => {
+    const { zs, agents, state } = build(false)
+    const logBefore = kafka.log.length
+    zs._recompute(1)
+
+    expect(state.penalty.size).toBeGreaterThan(0)
+    expect(agents.calls.reroutes).toBe(1)
+    expect(agents.calls.checkerSet).toBe(1)
+    expect(kafka.log.slice(logBefore).some(e => e.topic === 'zone.red')).toBe(true)
+  })
+
+  test('dispose() en metricsOnly no borra las penalizaciones de Spark del estado compartido', () => {
+    const { zs, state } = build(true)
+    zs._recompute(1)                                  // deja isRed=1 en la zona congestionada
+    state.penalty.set('spark-edge', 500)              // penalización puesta por applySparkRedZones
+    zs.dispose()
+    expect(state.penalty.get('spark-edge')).toBe(500)
+  })
+})
+
+describe('AnalyticsConsumer (zonas rojas del dashboard = detector Spark, no el índice C)', () => {
+  const consumer = () => new AnalyticsConsumer({ bridge: { mode: 'local', emitter: new EventEmitter() } })
+
+  test('noteSparkRedZones fija el conteo que reporta metricsForAdmin', () => {
+    const c = consumer()
+    c._ingest('agent.position', { room: 'ECCI-1234', avg_speed_mps: 3, stuck: 0, moving: 1, waiting: 0, arrived: 0 })
+    c.noteSparkRedZones('ECCI-1234', 3)
+    expect(c.metricsForAdmin('ECCI-1234').global.redZones).toBe(3)
+  })
+
+  test('analytics.snapshot alimenta C̄ y el heatmap pero NO pisa el conteo de Spark', () => {
+    const c = consumer()
+    c.noteSparkRedZones('ECCI-1234', 2)
+    c._ingest('analytics.snapshot', {
+      room: 'ECCI-1234', avg_C: 0.42, red_zones: 99,
+      zones_C: [0.1, 0.9], zones_red: [0, 1],
+    })
+    const m = c.metricsForAdmin('ECCI-1234')
+    expect(m.global.avgC).toBe(0.42)                  // C̄ vuelve a estar vivo
+    expect(m.zones.C).toEqual([0.1, 0.9])             // gradiente del heatmap vivo
+    expect(m.global.redZones).toBe(2)                 // Spark manda, no red_zones interno
+  })
+
+  test('la serie roja del sparkline sale del conteo Spark', () => {
+    const c = consumer()
+    c.noteSparkRedZones('ECCI-1234', 4)
+    c._closeWindows()
+    expect(c.metricsForAdmin('ECCI-1234').series.red.at(-1)).toBe(4)
   })
 })

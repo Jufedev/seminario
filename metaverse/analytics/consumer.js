@@ -156,8 +156,11 @@ export class AnalyticsConsumer {
         st.incidentsActive.delete(e.incident_id)
         break
       case 'analytics.snapshot':
+        // avg_C y zones_C vienen del ZoneSystem en modo solo-métricas. El conteo
+        // de zonas rojas NO se toma de aquí: la fuente de verdad es el detector
+        // Spark y llega por noteSparkRedZones() (red_zones del snapshot es la
+        // opinión informativa del índice C interno, no la detección de registro).
         st.global.avgC = e.avg_C
-        st.global.redZones = e.red_zones
         if (e.zones_C) {
           st.zonesC = e.zones_C
           st.zonesRed = e.zones_red
@@ -192,6 +195,14 @@ export class AnalyticsConsumer {
       if (s.t.length > MAX_SAMPLES) for (const k in s) s[k].shift()
       st.window = { arrivals: 0, decisions: 0, incidents: 0 }
     }
+  }
+
+  // Conteo de zonas rojas ACTIVAS según el detector Spark (RedPointStore, con
+  // TTL). Lo inyecta index.js cada ~1s; de aquí salen el KPI y la serie roja
+  // del dashboard, coherentes con el overlay que ven los clientes.
+  noteSparkRedZones(room, count) {
+    const st = this._room(room)
+    if (st) st.global.redZones = count
   }
 
   // ── Nivel USUARIO: your_analytics ──
