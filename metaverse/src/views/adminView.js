@@ -1,6 +1,7 @@
 import { navigate } from '../router.js'
 import { session } from '../net/session.js'
 import { createOnlineWorld, OWNER_COLORS } from './onlineWorld.js'
+import { wireCopyButton } from '../ui/clipboard.js'
 
 // ════════════════════════════════════════════════════════════════
 //  VISTA ADMIN (M3) — mundo completo en 3D (con toggle a 2D).
@@ -19,6 +20,7 @@ export function renderAdminView(app) {
     <div class="room-code-banner panel">
       <span class="role-badge admin">👑 ADMIN</span>
       <span>Sala <b class="room-code">${session.code}</b> — comparte este código</span>
+      <button id="btn-copy-code" class="btn-copy-code" title="Copiar código de sala">📋</button>
       <span id="r-status">🟡</span>
     </div>
     <div class="sim-topbar">
@@ -101,6 +103,7 @@ export function renderAdminView(app) {
   }
   btn2d.addEventListener('click', () => setMode('2d'))
   btn3d.addEventListener('click', () => setMode('3d'))
+  wireCopyButton(view.querySelector('#btn-copy-code'), () => session.code)
   view.querySelector('#btn-leave').addEventListener('click', () => { session.leave(); navigate('#/lobby') })
 
   // ── Controles del admin → mensajes al servidor ──

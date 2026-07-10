@@ -2,6 +2,7 @@ import { navigate } from '../router.js'
 import { session } from '../net/session.js'
 import { createOnlineWorld, OWNER_COLORS } from './onlineWorld.js'
 import { buildOptions } from './config.js'
+import { wireCopyButton } from '../ui/clipboard.js'
 
 // ════════════════════════════════════════════════════════════════
 //  VISTA USUARIO (M3) — SOLO 2D cenital. El usuario controla SU flota:
@@ -21,6 +22,7 @@ export function renderUserView(app) {
     <div class="room-code-banner panel">
       <span class="role-badge user" style="border-color:${myColor};color:${myColor}">🚗 USUARIO ${session.slot}</span>
       <span>Sala <b class="room-code">${session.code}</b></span>
+      <button id="btn-copy-code" class="btn-copy-code" title="Copiar código de sala">📋</button>
       <span id="r-status">🟡</span>
     </div>
     <div class="sim-topbar">
@@ -82,6 +84,7 @@ export function renderUserView(app) {
   })
 
   view.querySelector('#btn-leave').addEventListener('click', () => { session.leave(); navigate('#/lobby') })
+  wireCopyButton(view.querySelector('#btn-copy-code'), () => session.code)
 
   // ── Controles de flota → mensajes al servidor ──
   const selOrigin = view.querySelector('#sel-origin')
