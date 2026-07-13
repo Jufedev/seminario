@@ -4,9 +4,10 @@
 #
 # One codebase, two environments — selected by which profile you copy to .env:
 #   cp env/env.dev.example  .env     # local distrobox (native Kafka, local Spark)
-#   cp env/env.prod.example .env     # Azure (Event Hubs + Databricks)
+#   cp env/env.prod.example .env     # Azure (Event Hubs + the detector container)
 # The detector and the metaverse read the same KAFKA_BOOTSTRAP / EVENTHUBS_*
-# variables, so switching environments never changes code.
+# variables, so switching environments never changes code. In Azure the detector
+# runs the SAME pipeline/red_point_detector.py, inside a container.
 
 # Load the active environment profile (if present) and export it to every recipe.
 -include .env
@@ -99,16 +100,20 @@ dev: ## Bring up the WHOLE local loop with one command (Kafka+detector+server+we
 	./scripts/dev-up.sh
 
 # --- Infrastructure (prod — Azure via Terraform) ----------------------------
-# deploy is the whole thing (infra + app on the VM + the Spark job); the
+# deploy is the whole thing (infra + app on the VM + the detector container); the
 # infra-* targets are the escape hatch for driving Terraform by hand.
+#
+# ONE Terraform stage. The apply also BUILDS the detector image, with `az acr build`
+# (inside Azure — there is no Docker on this box), because the Container App cannot
+# reference an image that does not exist yet. See infra/detector.tf.
 
-deploy: ## Deploy EVERYTHING to Azure (infra + app VM + Databricks detector job)
+deploy: ## Deploy EVERYTHING to Azure (infra + app VM + the detector container)
 	./scripts/deploy-azure.sh up
 
-detector-start: ## Turn the Azure detector ON (starts the Databricks job cluster — bills per hour)
+detector-start: ## Turn the Azure detector ON (scales the container to 1 replica — bills per hour)
 	./scripts/deploy-azure.sh start
 
-detector-stop: ## Turn the Azure detector OFF (terminates the cluster — back to $0/hour)
+detector-stop: ## Turn the Azure detector OFF (scales the container to 0 replicas — back to $0/hour)
 	./scripts/deploy-azure.sh stop
 
 deploy-status: ## Show the Azure deployment status (web, VM, detector)
@@ -123,7 +128,12 @@ infra-init: ## terraform init (needs ARM_SUBSCRIPTION_ID)
 infra-plan: ## terraform plan
 	cd infra && terraform plan
 
-infra-apply: ## terraform apply (provisions Event Hubs + Databricks + ADLS)
+# The guard runs FIRST and can abort the apply. If the budget kill-switch has fired, it
+# scaled the detector to 0 replicas OUTSIDE Terraform — and a plain `terraform apply`
+# would happily converge that back to the declared `detector_running = true`, silently
+# switching the billing back on. The escape hatch must not be a way around the safety net.
+infra-apply: ## terraform apply (Event Hubs + ADLS + the VM + the detector container)
+	./scripts/deploy-azure.sh guard
 	cd infra && terraform apply
 
 # --- Docker alternative for Kafka (if you prefer it over native) ------------

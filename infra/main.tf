@@ -1,13 +1,23 @@
 # Real-time analytics infrastructure for the metaverse traffic project.
 #
-# Pipeline:  metaverse backend -> Event Hubs (Kafka endpoint) -> Databricks
-#            (Spark Structured Streaming) -> Event Hubs -> metaverse backend
+# Pipeline:  metaverse backend -> Event Hubs (Kafka endpoint) -> the detector
+#            container (Spark Structured Streaming, see detector.tf)
+#            -> Event Hubs -> metaverse backend
 # Storage:   ADLS Gen2 for the raw historical event archive.
-# Compute:   one VM hosting the metaverse frontend and backend.
+# Compute:   one VM hosting the metaverse frontend and backend, plus the
+#            serverless container that runs the detector.
 #
-# Layout follows docs/arquitectura.drawio: four resource groups
-# (network, compute, bigdata, storage) under SUB-Prod. The management
-# group and subscription are managed outside Terraform.
+# ONE root module, ONE `terraform apply`. v1 was split in two stages
+# (infra/ + infra/databricks/) for a single reason: the `databricks` provider had
+# to be configured with a workspace URL that was created in the same apply, and a
+# provider cannot be configured from a resource it is creating. With Databricks
+# gone that constraint is gone with it — and so are the NAT gateway it billed by
+# the hour and the rg-<project>-databricks-managed group it left behind on every
+# destroy. v1 is preserved on the `v1-databricks` branch.
+#
+# Layout follows docs/arquitectura.drawio: one resource group per pipeline role
+# under SUB-Prod. The management group and subscription are managed outside
+# Terraform.
 
 locals {
   # Governance tags (Well-Architected: operational excellence)
@@ -40,9 +50,10 @@ resource "random_string" "suffix" {
 # opening it. Every group also carries a `proposito` tag, which the portal can
 # show as a column.
 #
-# A sixth group appears in the portal that is NOT declared here:
-# rg-<project>-databricks-managed. Databricks creates it (see the workspace
-# below) and Terraform never owns it.
+# Six groups, and six is what the portal shows. v1 had a SEVENTH,
+# rg-<project>-databricks-managed, which Databricks created for itself, Terraform
+# never owned, and `terraform destroy` never deleted — it had to be purged by
+# hand or it blocked the next deploy. It no longer exists.
 
 resource "azurerm_resource_group" "network" {
   name     = "rg-${var.project_name}-network"
@@ -62,10 +73,14 @@ resource "azurerm_resource_group" "streaming" {
   tags     = merge(local.tags, { proposito = "Transporte de eventos: Event Hubs, el 'Kafka' administrado del pipeline" })
 }
 
+# Same group as in v1, repurposed: it used to hold the Databricks workspace, it
+# now holds the container runtime that replaced it (registry, Container Apps
+# environment, the detector app and its logs — see detector.tf). Same role in the
+# pipeline, so the same group.
 resource "azurerm_resource_group" "analytics" {
   name     = "rg-${var.project_name}-analytics"
   location = var.location
-  tags     = merge(local.tags, { proposito = "Procesamiento: Databricks, donde corre el detector de zonas rojas en Spark" })
+  tags     = merge(local.tags, { proposito = "Procesamiento: el contenedor donde corre el detector de zonas rojas en Spark" })
 }
 
 resource "azurerm_resource_group" "datalake" {
@@ -281,9 +296,22 @@ resource "azurerm_storage_account" "datalake" {
   is_hns_enabled                  = true # hierarchical namespace = ADLS Gen2
   min_tls_version                 = "TLS1_2"
   allow_nested_items_to_be_public = false # no anonymous public blob access
+
+  # Stated explicitly rather than left to the provider default, because the detector
+  # now depends on it to start at all: Spark opens the checkpoint over abfss:// with
+  # shared-key auth. If a subscription policy ever turns account keys off, the failure
+  # would surface as a detector that cannot open its checkpoint — nowhere near the
+  # setting that caused it. Declaring it means Terraform, not a policy, owns the answer.
+  shared_access_key_enabled = true
   # The name cannot be more descriptive than this: Azure caps storage account names at
   # 24 characters, lowercase alphanumeric only — no hyphens. The tag carries the meaning.
-  tags = merge(local.tags, { proposito = "Archivo historico crudo de posiciones de avatares (opt-in: ENABLE_ARCHIVE=true)" })
+  #
+  # Two things live here, and only one of them is optional:
+  #   checkpoints/  the Spark checkpoint. ALWAYS. This is why is_hns_enabled matters:
+  #                 a real hierarchical namespace gives atomic rename, which is the
+  #                 primitive Spark's checkpoint commit protocol is built on.
+  #   positions/    the raw historical archive. Opt-in (ENABLE_ARCHIVE=true).
+  tags = merge(local.tags, { proposito = "Estado del detector: checkpoint de Spark (siempre) y archivo historico de posiciones (opt-in: ENABLE_ARCHIVE=true)" })
 }
 
 resource "azurerm_storage_data_lake_gen2_filesystem" "events" {
@@ -291,40 +319,16 @@ resource "azurerm_storage_data_lake_gen2_filesystem" "events" {
   storage_account_id = azurerm_storage_account.datalake.id
 }
 
-# --- Databricks: runs the Spark Structured Streaming job ------------------
-# The workspace itself costs nothing while no cluster is running; the cost
-# is per cluster-hour. Create single-node clusters for demos and stop them.
-
-resource "azurerm_databricks_workspace" "detector" {
-  name                = "dbw-${var.project_name}-detector"
-  location            = azurerm_resource_group.analytics.location
-  resource_group_name = azurerm_resource_group.analytics.name
-  # Azure retired the Standard SKU: creating one now fails with
-  # "DatabricksStandardSkuNotSupported". Premium is the floor.
-  sku = "premium"
-
-  # Databricks creates a SECOND resource group of its own, which Terraform does not
-  # own and `terraform destroy` does not delete. Naming it explicitly means the team
-  # can recognise it in the portal and scripts/deploy-azure.sh can clean it up.
-  #
-  # What Databricks puts in there: the DBFS root storage account, a Unity Catalog
-  # access connector, the workers VNet + NSG, and — while the workspace exists — a NAT
-  # gateway with a public IP. That NAT gateway is how the cluster reaches the internet:
-  # secure cluster connectivity gives the workers no public IP, so their only way out is
-  # SNAT through it. It bills ~$0.045/h for as long as the workspace exists, cluster or
-  # no cluster, and it is deleted with the workspace. The DBFS storage and the connector
-  # are what survive, and they must be removed before the next workspace can be created.
-  managed_resource_group_name = "rg-${var.project_name}-databricks-managed"
-
-  tags = merge(local.tags, { proposito = "Corre el detector de zonas rojas (Spark Structured Streaming) como job continuo" })
-}
+# --- The detector -----------------------------------------------------------
+# It used to live here as an azurerm_databricks_workspace. It now runs as a
+# container on Azure Container Apps: see detector.tf, which also explains why.
 
 # --- Budget guard: alert early, then cut the bill --------------------------
-# Subscription-level so it covers all four resource groups at once.
+# Subscription-level so it covers every resource group at once.
 #
 # A budget only NOTIFIES — Azure has no hard spending cap. So the 100% notification
 # also hits an action group that fires the kill-switch runbook (killswitch.tf), which
-# deallocates the VM and pauses the Databricks jobs.
+# deallocates the VM and scales the detector container down to zero replicas.
 #
 # ⚠️ Cost data lags by hours: treat this as a safety net, not a brake. The brake is
 # `make detector-stop` after the demo.

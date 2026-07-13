@@ -1,17 +1,23 @@
 #!/usr/bin/env bash
 # Despliegue casi-automático a Azure: un comando por etapa del ciclo de vida.
 #
-#   ./scripts/deploy-azure.sh up      # infra + app en la VM + job del detector
-#   ./scripts/deploy-azure.sh start   # detector ON  (arranca el job-cluster)
-#   ./scripts/deploy-azure.sh stop    # detector OFF (termina el cluster -> $0/h)
+#   ./scripts/deploy-azure.sh up      # infra + app en la VM + contenedor del detector
+#   ./scripts/deploy-azure.sh start   # detector ON  (1 réplica: arranca en segundos)
+#   ./scripts/deploy-azure.sh stop    # detector OFF (0 réplicas -> $0/h)
 #   ./scripts/deploy-azure.sh status  # IP, web, estado del detector, VM
 #   ./scripts/deploy-azure.sh down    # destruye TODO
 #
-# Terraform en DOS etapas:
-#   infra/            Azure (Event Hubs, ADLS, Databricks, VNet, VM con cloud-init)
-#   infra/databricks/ el job de Spark dentro del workspace
-# Están separadas porque el provider databricks necesita la URL del workspace, y
-# un provider no puede configurarse con algo que se crea en ese mismo apply.
+# Terraform en UNA sola etapa (infra/). En v1 eran dos, y por un único motivo: el
+# provider `databricks` necesitaba la URL de un workspace que se creaba en ese mismo
+# apply, y un provider no puede configurarse con algo que todavía no existe. Sin
+# Databricks ese motivo desapareció.
+#
+# La imagen del detector se construye con `az acr build` — es decir, DENTRO de Azure.
+# No es una preferencia: en esta caja no hay Docker ni Podman, y el proyecto ya descartó
+# Docker-dentro-de-distrobox por frágil. El único motor de build que tenemos es el de la
+# nube. La construcción la dispara el propio `terraform apply` (infra/detector.tf), para
+# que el orden registro -> imagen -> Container App sea una dependencia real y no una
+# secuencia que este script tenga que acertar de memoria.
 #
 # Este script NO reemplaza a Terraform: lo orquesta. Todo lo que crea es
 # declarativo y `down` lo borra entero.
@@ -19,9 +25,10 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 INFRA="infra"
-DBX="infra/databricks"
-PROD_ENV="env/env.prod.example"   # única fuente de verdad de la calibración
-ENV_OUT=".env.azure"              # perfil listo para correr local contra Azure
+PROD_ENV="env/env.prod.example"          # única fuente de verdad de la calibración
+TFVARS="infra/terraform.tfvars"          # identidad del despliegue (se escribe una vez)
+CALIB_TFVARS="infra/detector.auto.tfvars" # calibración (se regenera en cada deploy)
+ENV_OUT=".env.azure"                     # perfil listo para correr local contra Azure
 
 AUTO=0        # -y : no preguntar en los apply/destroy
 FORCE=0       # --force : seguir aunque el repo no esté pusheado
@@ -32,10 +39,7 @@ PROJECT="metaverso"
 VM_USER="azureuser"
 VM_RG="rg-${PROJECT}-app"
 VM_NAME="vm-${PROJECT}-app"
-DBX_RG="rg-${PROJECT}-analytics"
-DBX_WORKSPACE="dbw-${PROJECT}-detector"
-# Databricks crea este resource group solo; Terraform NO lo conoce y no lo borra.
-DBX_MANAGED_RG="rg-${PROJECT}-databricks-managed"
+ACA_API="2024-03-01"   # api-version de Microsoft.App (la usan status y el guard)
 
 # --- Salida ----------------------------------------------------------------
 
@@ -62,50 +66,21 @@ preflight() {
   ARM_SUBSCRIPTION_ID="$(az account show --query id -o tsv)"
   export ARM_SUBSCRIPTION_ID
   ok "Suscripción $(az account show --query name -o tsv)"
+  # `terraform apply` va a llamar a `az acr build`: sin sesión activa, el apply moriría
+  # a mitad de camino en vez de acá.
+  ok "az listo para construir la imagen del detector en ACR"
 
   check_repo_reachable
-  check_no_orphan_databricks_rg
   ok "Preflight OK"
-}
-
-# Un `down` anterior pudo dejar el managed RG de Databricks en pie (Terraform no lo
-# borra: no es suyo). Su nombre deriva del nuestro, así que un resto BLOQUEA la creación
-# del próximo workspace — y el apply muere recién en la etapa 1, con todo lo demás ya creado.
-#
-# Pero que el RG exista NO significa que sea un resto: si el workspace está vivo, ese RG es
-# suyo y está EN USO. Borrarlo entonces no solo estaría mal — es imposible: Databricks le
-# pone una *deny assignment* del sistema que le prohíbe el borrado incluso al dueño de la
-# suscripción. El managed RG solo se va cuando se va el workspace.
-#
-# Por eso el huérfano se define como "el RG existe Y el workspace NO".
-check_no_orphan_databricks_rg() {
-  az group show -n "$DBX_MANAGED_RG" >/dev/null 2>&1 || { ok "Sin restos de Databricks"; return 0; }
-
-  if databricks_workspace_exists; then
-    ok "$DBX_MANAGED_RG es del workspace actual (en uso, no se toca)"
-    return 0
-  fi
-
-  warn "Quedó el resource group $DBX_MANAGED_RG de un despliegue anterior: bloquearía el workspace nuevo."
-  purge_databricks_managed_rg
-  say "Esperando a que Azure lo termine de borrar"
-  for _ in $(seq 1 60); do
-    az group show -n "$DBX_MANAGED_RG" >/dev/null 2>&1 || { ok "Limpio"; return 0; }
-    printf '.'; sleep 10
-  done
-  printf '\n'
-  die "Azure sigue borrando $DBX_MANAGED_RG después de 10 min. Esperá y reintentá."
-}
-
-databricks_workspace_exists() {
-  az resource show -g "$DBX_RG" -n "$DBX_WORKSPACE" \
-    --resource-type Microsoft.Databricks/workspaces >/dev/null 2>&1
 }
 
 # cloud-init clona el repo por HTTPS SIN credenciales para desplegar la app en la
 # VM. Si el repo es privado, el clone falla dentro de la VM y la web nunca sube:
 # el `terraform apply` sale verde igual. Por eso se verifica ANTES de gastar.
 # Y si el HEAD local no está pusheado, la VM despliega código viejo en silencio.
+#
+# (El detector NO depende de esto: su código viaja dentro de la imagen, que se
+# construye desde el working copy. Esto es solo por la VM.)
 check_repo_reachable() {
   local url head remote_head branch
   url="$(repo_url)"
@@ -134,7 +109,7 @@ check_repo_reachable() {
   fi
 
   if [ -n "$(git status --porcelain)" ]; then
-    warn "Hay cambios sin commitear: no van a llegar a la VM."
+    warn "Hay cambios sin commitear: no van a llegar a la VM (la imagen del detector sí los lleva)."
   fi
 }
 
@@ -143,13 +118,14 @@ repo_url() {
   git remote get-url origin | sed -e 's#^git@github.com:#https://github.com/#' -e 's#/*$##'
 }
 
-# --- terraform.tfvars (etapa 1) --------------------------------------------
+# --- terraform.tfvars: la identidad del despliegue -------------------------
+# Se escribe UNA vez y no se vuelve a tocar: acá viven el email del presupuesto y la
+# llave SSH del operador, que no son cosas que un redespliegue tenga derecho a pisar.
 
 ensure_infra_tfvars() {
-  local tfvars="$INFRA/terraform.tfvars"
-  [ -f "$tfvars" ] && { ok "$tfvars ya existe (no lo toco)"; return; }
+  [ -f "$TFVARS" ] && { ok "$TFVARS ya existe (no lo toco)"; return; }
 
-  say "Generando $tfvars"
+  say "Generando $TFVARS"
 
   local key_file="${SSH_PUBLIC_KEY_FILE:-$HOME/.ssh/id_ed25519.pub}"
   if [ ! -f "$key_file" ]; then
@@ -161,19 +137,25 @@ ensure_infra_tfvars() {
   [ -n "$email" ] || die "No pude deducir el email para la alerta de presupuesto. Pasá BUDGET_EMAIL=..."
 
   umask 077
-  cat > "$tfvars" <<EOF
+  cat > "$TFVARS" <<EOF
 # Generado por scripts/deploy-azure.sh — gitignoreado a propósito.
 budget_contact_emails = ["${email}"]
 vm_ssh_public_key     = "$(cat "$key_file")"
 repo_url              = "$(repo_url)"
+
+# Interruptor del detector: lo mueven \`start\` y \`stop\`. Vive acá, y no en un \`-var\`
+# suelto, para que un redespliegue (\`up\`) no apague en silencio un detector que estaba
+# corriendo.
+detector_running = false
 EOF
   ok "Presupuesto avisa a ${email}; la VM acepta la llave ${key_file}"
 }
 
-# --- terraform.tfvars (etapa 2: Databricks) --------------------------------
+# --- detector.auto.tfvars: la calibración ----------------------------------
+# La calibración del detector vive en UN solo lugar (env/env.prod.example) para que el
+# detector de Azure no pueda quedar desincronizado del overlay del metaverso. Se
+# regenera en cada deploy; Terraform carga solo los *.auto.tfvars.
 
-# La calibración del detector vive en UN solo lugar (env/env.prod.example) para
-# que el job de Azure no pueda quedar desincronizado del overlay del metaverso.
 prod_param() {
   local key="$1" val
   val="$(grep -E "^${key}=" "$PROD_ENV" | head -1 | cut -d= -f2-)"
@@ -181,38 +163,62 @@ prod_param() {
   printf '%s' "$val"
 }
 
-tf_out() { terraform -chdir="$1" output -raw "$2"; }
+# --- El checkpoint es PERSISTENTE ahora: cambiar la ventana no es gratis ----
+#
+# El checkpoint vive en ADLS y guarda los offsets de Event Hubs + el estado de las
+# ventanas. Spark NO puede retomar un checkpoint cuyo esquema de agregación cambió: si
+# tocás WINDOW_DURATION o WINDOW_SLIDE y redesplegás, el detector arranca y se muere
+# (o peor: queda mudo). En dev eso se arregla con `make clean`; en prod, borrar el
+# checkpoint es tirar los offsets a la basura.
+#
+# Como este script regenera la calibración desde env.prod.example en CADA deploy, un
+# cambio de ventana se colaría sin que nadie lo note. Por eso lo comparamos contra lo
+# último que se desplegó y avisamos ANTES de aplicar.
+check_checkpoint_compat() {
+  [ -f "$CALIB_TFVARS" ] || return 0   # primer deploy: no hay checkpoint que romper
 
-# El estado deseado del detector vive en el tfvars, no en un `-var` suelto: así
-# un redespliegue (`up`) no apaga en silencio un detector que estaba corriendo.
-detector_state() {
-  grep -E '^detector_running' "$DBX/terraform.tfvars" 2>/dev/null \
-    | grep -q true && printf 'true' || printf 'false'
+  local old_dur old_slide new_dur new_slide
+  old_dur="$(grep -E '^window_duration' "$CALIB_TFVARS" | cut -d'"' -f2 || true)"
+  old_slide="$(grep -E '^window_slide' "$CALIB_TFVARS" | cut -d'"' -f2 || true)"
+  new_dur="$(prod_param WINDOW_DURATION)"
+  new_slide="$(prod_param WINDOW_SLIDE)"
+
+  [ "$old_dur" = "$new_dur" ] && [ "$old_slide" = "$new_slide" ] && return 0
+
+  warn "CAMBIÓ LA VENTANA: ${old_dur}/${old_slide} -> ${new_dur}/${new_slide}
+
+     El checkpoint de Spark vive en ADLS y guarda el estado de las ventanas VIEJAS.
+     Spark no puede retomar un checkpoint con otra agregación: el detector va a fallar
+     al arrancar, o peor, va a quedar mudo sin error obvio.
+
+     Si el cambio es a propósito, borrá el checkpoint (perdés los offsets: el detector
+     retoma desde 'latest', que para una demo en vivo está bien):
+
+       az storage fs directory delete -f avatar-events \\
+         --path checkpoints/red-point-detector --account-name <cuenta> --yes
+
+     La cuenta sale de: terraform -chdir=infra output -raw datalake_account"
+
+  if [ "$AUTO" != 1 ]; then
+    printf '  ¿Seguir igual? [y/N] '
+    local answer; read -r answer
+    case "$answer" in
+      y|Y|s|S) ;;
+      *) die "Cancelado. Borrá el checkpoint primero, o revertí la ventana en ${PROD_ENV}." ;;
+    esac
+  fi
 }
 
-set_detector_running() {
-  local want="$1"
-  sed -i -E "s/^detector_running.*/detector_running = ${want}/" "$DBX/terraform.tfvars"
-}
+write_calibration_tfvars() {
+  say "Calibrando el detector desde ${PROD_ENV}"
 
-write_dbx_tfvars() {
-  say "Cableando el job de Spark con los outputs de la infra"
-
-  local running="false"
-  [ -f "$DBX/terraform.tfvars" ] && running="$(detector_state)"
+  check_checkpoint_compat
 
   umask 077
-  cat > "$DBX/terraform.tfvars" <<EOF
-# Generado por scripts/deploy-azure.sh a partir de \`terraform output\` (etapa 1)
-# y de la calibración de ${PROD_ENV}. Contiene secretos: gitignoreado.
-
-# Interruptor del detector: lo mueven \`start\` y \`stop\`.
-detector_running = ${running}
-
-workspace_url               = "$(tf_out "$INFRA" databricks_workspace_url)"
-workspace_id                = "$(tf_out "$INFRA" databricks_workspace_id)"
-kafka_bootstrap             = "$(tf_out "$INFRA" kafka_bootstrap)"
-eventhubs_connection_string = "$(tf_out "$INFRA" eventhubs_connection_string)"
+  cat > "$CALIB_TFVARS" <<EOF
+# Generado por scripts/deploy-azure.sh desde ${PROD_ENV} en cada deploy.
+# NO lo edites: editá ${PROD_ENV}, que es la fuente de verdad compartida con el overlay
+# del metaverso. Terraform carga los *.auto.tfvars solo.
 
 cell_size_x            = $(prod_param CELL_SIZE_X)
 cell_size_y            = $(prod_param CELL_SIZE_Y)
@@ -223,23 +229,94 @@ window_slide           = "$(prod_param WINDOW_SLIDE)"
 min_stationary_avatars = $(prod_param MIN_STATIONARY_AVATARS)
 min_mean_dwell_s       = $(prod_param MIN_MEAN_DWELL_S)
 
-# Archivo histórico en ADLS: apagado por defecto (encendelo con ENABLE_ARCHIVE=true).
-enable_archive      = ${ENABLE_ARCHIVE:-false}
-datalake_account    = "$(tf_out "$INFRA" datalake_account)"
-datalake_access_key = "$(tf_out "$INFRA" datalake_access_key)"
+# Archivo histórico crudo a ADLS. APAGADO por defecto, y no por timidez: el stream del
+# archivo comparte awaitAnyTermination() con el de zonas rojas, así que si el archivo
+# falla en su primer batch se lleva puesto al DETECTOR. Encendelo sabiendo eso:
+#   ENABLE_ARCHIVE=true make deploy
+# (El checkpoint de Spark NO depende de este flag: siempre vive en ADLS.)
+enable_archive = ${ENABLE_ARCHIVE:-false}
 EOF
-  ok "Detector calibrado: ventana $(prod_param WINDOW_DURATION), $(prod_param MIN_STATIONARY_AVATARS) avatares, dwell $(prod_param MIN_MEAN_DWELL_S)s"
+  ok "Ventana $(prod_param WINDOW_DURATION), $(prod_param MIN_STATIONARY_AVATARS) avatares, dwell $(prod_param MIN_MEAN_DWELL_S)s"
+  if [ "${ENABLE_ARCHIVE:-false}" = "true" ]; then
+    warn "Archivo histórico ENCENDIDO: si el stream del archivo falla, se cae el detector con él."
+  fi
 }
 
-# Perfil de entorno para correr el metaverso/detector LOCAL contra Azure.
-write_env_azure() {
-  umask 077
-  {
-    sed -e "s#^KAFKA_BOOTSTRAP=.*#KAFKA_BOOTSTRAP=$(tf_out "$INFRA" kafka_bootstrap)#" \
-        -e "s#^EVENTHUBS_CONNECTION_STRING=.*#EVENTHUBS_CONNECTION_STRING=$(tf_out "$INFRA" eventhubs_connection_string)#" \
-        "$PROD_ENV"
-  } > "$ENV_OUT"
-  ok "$ENV_OUT escrito (para correr local contra Azure: cp $ENV_OUT .env)"
+# --- El interruptor del detector -------------------------------------------
+# Estado deseado en el tfvars, aplicado por Terraform. Podríamos escalar la Container App
+# a mano con `az`, pero entonces el estado real y el de Terraform quedarían en desacuerdo
+# y el próximo `up` apagaría el detector sin decir nada.
+
+set_detector_running() {
+  local want="$1"
+  if grep -qE '^detector_running' "$TFVARS"; then
+    sed -i -E "s/^detector_running.*/detector_running = ${want}/" "$TFVARS"
+  else
+    printf '\ndetector_running = %s\n' "$want" >> "$TFVARS"
+  fi
+}
+
+tf_out() { terraform -chdir="$INFRA" output -raw "$1"; }
+
+# Igual que tf_out, pero no explota si todavía no hay estado (lo usa el guard, que
+# corre ANTES de saber si hay despliegue).
+tf_out_soft() { terraform -chdir="$INFRA" output -raw "$1" 2>/dev/null || true; }
+
+# Réplicas que Azure tiene AHORA (no las que Terraform cree tener).
+# `az resource show` es az core: no necesita la extensión `containerapp`.
+detector_live_min_replicas() {
+  local app_id="$1"
+  az resource show --ids "$app_id" --api-version "$ACA_API" \
+    --query 'properties.template.scale.minReplicas' -o tsv 2>/dev/null || true
+}
+
+# --- El guard del kill-switch (NO lo saques) --------------------------------
+#
+# El kill-switch (infra/killswitch.ps1) escala la Container App a 0 réplicas por AFUERA
+# de Terraform: es un runbook que dispara la alerta de presupuesto. Pero el estado
+# deseado sigue diciendo `detector_running = true` en el tfvars.
+#
+# Entonces el próximo `terraform apply` — un `make deploy`, un `make infra-apply`, hasta
+# un apply "inocente" para cambiar otra cosa — converge la realidad al estado declarado
+# y VUELVE A PRENDER exactamente el gasto que la red de seguridad acababa de cortar. Sin
+# decir una palabra. El kill-switch quedaría deshecho por el propio despliegue.
+#
+# Por eso: si Azure tiene 0 réplicas mientras el tfvars pide `true`, abortamos.
+#
+# Y NO lo resolvemos solos. Que el kill-switch haya disparado significa que se tocó el
+# techo del presupuesto: eso lo mira una persona, revisa cuánto gastó, y recién ahí
+# decide encender de nuevo con `make detector-start`. Un script que "arregla" esto solo
+# es un script que se gasta el crédito de alguien.
+killswitch_guard() {
+  [ -d "$INFRA/.terraform" ] || return 0   # todavía no hay despliegue: nada que proteger
+
+  local app_id want live
+  app_id="$(tf_out_soft detector_app_id)"
+  [ -n "$app_id" ] || return 0
+
+  want="$(grep -E '^detector_running' "$TFVARS" 2>/dev/null | grep -q true && printf 'true' || printf 'false')"
+  [ "$want" = "true" ] || return 0         # el estado deseado es "apagado": no hay nada que reactivar
+
+  live="$(detector_live_min_replicas "$app_id")"
+  [ "$live" = "0" ] || return 0            # coinciden (o no pudimos leer Azure): seguí
+
+  die "EL KILL-SWITCH DISPARÓ. No sigo.
+
+     Azure tiene el detector en 0 réplicas, pero ${TFVARS} todavía dice
+     detector_running = true. Si aplico ahora, Terraform lo vuelve a prender y
+     revierte el corte de gasto que hizo la alerta de presupuesto.
+
+     Se tocó el techo del presupuesto (var.budget_amount). Antes de reintentar:
+
+       1. Mirá el gasto real:
+            az consumption usage list --top 5
+          (o Cost Management en el portal — los datos tardan horas en actualizarse)
+       2. Si de verdad querés volver a encender, decilo explícitamente:
+            make detector-start
+       3. Si NO, dejalo apagado:
+            ./scripts/deploy-azure.sh stop     # alinea el tfvars con la realidad
+
+     Esto no se arregla solo a propósito: si el kill-switch saltó, lo mira una persona."
 }
 
 # --- Terraform -------------------------------------------------------------
@@ -254,10 +331,9 @@ apply_args() {
 }
 
 tf_apply() {
-  local dir="$1"; shift
-  terraform -chdir="$dir" init -input=false >/dev/null
+  terraform -chdir="$INFRA" init -input=false >/dev/null
   # shellcheck disable=SC2046
-  terraform -chdir="$dir" apply $(apply_args) "$@"
+  terraform -chdir="$INFRA" apply $(apply_args)
 }
 
 # --- Espera a que la VM sirva la web ---------------------------------------
@@ -285,18 +361,15 @@ wait_for_app() {
 cmd_up() {
   preflight
   ensure_infra_tfvars
+  killswitch_guard          # ANTES de aplicar: un apply podría revertir el corte de gasto
+  write_calibration_tfvars
 
-  say "Etapa 1/2 — infra de Azure (Event Hubs, ADLS, Databricks, VNet, VM)"
-  tf_apply "$INFRA"
-
-  write_dbx_tfvars
-
-  say "Etapa 2/2 — job del detector en Databricks (creado PAUSADO: cuesta \$0)"
-  tf_apply "$DBX"
+  say "Desplegando (el apply construye la imagen del detector con az acr build: ~4 min la primera vez)"
+  tf_apply
 
   write_env_azure
 
-  local ip; ip="$(tf_out "$INFRA" vm_public_ip)"
+  local ip; ip="$(tf_out vm_public_ip)"
   wait_for_app "$ip"
 
   cat <<EOF
@@ -304,51 +377,132 @@ cmd_up() {
 ${bold}Desplegado.${off}
 
   Metaverso   http://${ip}
-  Databricks  $(tf_out "$DBX" job_url)
+  Detector    $(tf_out detector_app_name) (0 réplicas — apagado)
+  Imagen      $(tf_out detector_image)
+  Checkpoint  $(tf_out detector_checkpoint)
 
-El detector está PAUSADO (cluster apagado = \$0/hora). Para la demo:
+El detector está apagado. Para la demo:
 
-  make detector-start      # detector ON  — el cluster tarda ~5 min en arrancar
+  make detector-start      # detector ON  — el contenedor levanta en segundos
   make deploy-status       # ver que todo esté arriba
   make detector-stop       # detector OFF — apagalo apenas termine la demo
+
+${bold}Lo que YA está cobrando, con el detector apagado:${off} la VM (~\$0.126/h),
+Event Hubs (~\$0.015/h), el registro (Basic, ~\$5/mes fijo) y Log Analytics.
+Son ~\$0.15/hora ≈ \$3.4/día. Sobre un presupuesto de estudiante, eso importa:
+
+  ./scripts/deploy-azure.sh vm-stop    # desasigna la VM (lo más caro)
+  make deploy-down                     # destruye TODO (lo único que deja el gasto en \$0)
 
 EOF
 }
 
+# Perfil de entorno para correr el metaverso/detector LOCAL contra Azure.
+write_env_azure() {
+  umask 077
+  {
+    sed -e "s#^KAFKA_BOOTSTRAP=.*#KAFKA_BOOTSTRAP=$(tf_out kafka_bootstrap)#" \
+        -e "s#^EVENTHUBS_CONNECTION_STRING=.*#EVENTHUBS_CONNECTION_STRING=$(tf_out eventhubs_connection_string)#" \
+        "$PROD_ENV"
+  } > "$ENV_OUT"
+  ok "$ENV_OUT escrito (para correr local contra Azure: cp $ENV_OUT .env)"
+}
+
+# `start` es la ÚNICA forma de volver a prender el detector, y es deliberado: es el acto
+# explícito de una persona. Por eso acá no corre killswitch_guard — si el kill-switch
+# disparó, este comando es justamente la decisión informada de revertirlo.
 cmd_start() {
-  [ -f "$DBX/terraform.tfvars" ] || die "No hay despliegue. Corré primero: make deploy"
-  say "Encendiendo el detector (Databricks levanta el job-cluster: ~5 min)"
+  [ -f "$TFVARS" ] || die "No hay despliegue. Corré primero: make deploy"
+  say "Encendiendo el detector (1 réplica)"
   set_detector_running true
-  AUTO=1 tf_apply "$DBX"
-  ok "Job UNPAUSED — seguilo en $(tf_out "$DBX" job_url)"
-  warn "Hasta que el cluster no esté RUNNING no hay zonas rojas. Paciencia."
+  AUTO=1 tf_apply
+  ok "Detector ON. El contenedor levanta en segundos (la imagen ya trae el conector de Kafka)."
+  warn "El detector cobra por hora mientras esté prendido. Apagalo apenas termine la demo."
 }
 
 cmd_stop() {
-  [ -f "$DBX/terraform.tfvars" ] || die "No hay despliegue."
-  say "Apagando el detector (cancela el run y termina el cluster)"
+  [ -f "$TFVARS" ] || die "No hay despliegue."
+  say "Apagando el detector (0 réplicas)"
   set_detector_running false
-  AUTO=1 tf_apply "$DBX"
-  ok "Job PAUSED — el cluster termina solo. Costo por hora: \$0"
-  warn "La VM sigue prendida (~\$30/mes). Apagala con: ./scripts/deploy-azure.sh vm-stop"
+  AUTO=1 tf_apply
+
+  # Nada de "costo $0". `min_replicas = 0` apaga el CONTENEDOR, no el despliegue: la VM,
+  # Event Hubs, el registro y Log Analytics siguen cobrando. Decir "$0" cuando en
+  # realidad son ~$0.15/h es exactamente así como se evapora el crédito sin que nadie
+  # se dé cuenta.
+  ok "Detector OFF: el contenedor deja de cobrar (0 réplicas)."
+  cat <<EOF
+
+  ${yellow}Ojo: esto NO deja el gasto en \$0.${off} Sigue cobrando:
+
+    VM              ~\$0.126/h   <- lo más caro que queda prendido
+    Event Hubs      ~\$0.015/h
+    Registro (ACR)  ~\$5/mes fijo
+    Log Analytics   por ingesta (poco a este volumen)
+
+  Total ≈ \$0.15/hora ≈ \$3.4/día.
+
+    ./scripts/deploy-azure.sh vm-stop    # desasigna la VM: baja a ~\$0.02/h
+    make deploy-down                     # destruye TODO: recién ahí es \$0
+
+EOF
 }
 
 cmd_status() {
   [ -d "$INFRA/.terraform" ] || die "No hay despliegue. Corré primero: make deploy"
 
-  local ip code
-  ip="$(tf_out "$INFRA" vm_public_ip)"
+  local ip code app_id app_name app_rg want live_min
+  ip="$(tf_out vm_public_ip)"
   code="$(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://${ip}" || echo "sin respuesta")"
+  app_id="$(tf_out detector_app_id)"
+  app_name="$(tf_out detector_app_name)"
+  app_rg="$(tf_out detector_resource_group)"
+  want="$(tf_out detector_running)"
+  live_min="$(detector_live_min_replicas "$app_id")"
+  [ -n "$live_min" ] || live_min='?'
 
   say "Estado"
   printf '  Metaverso   http://%s  [%s]\n' "$ip" "$code"
   printf '  VM          %s\n' "$(az vm show -d -g "$VM_RG" -n "$VM_NAME" --query powerState -o tsv 2>/dev/null || echo '?')"
-  printf '  Event Hubs  %s\n' "$(tf_out "$INFRA" kafka_bootstrap)"
+  printf '  Event Hubs  %s\n' "$(tf_out kafka_bootstrap)"
+  printf '  Detector    %s (min_replicas en Azure: %s)\n' \
+    "$([ "$want" = "true" ] && echo 'deseado ON' || echo 'deseado OFF')" "$live_min"
+  printf '  Imagen      %s\n' "$(tf_out detector_image)"
+  printf '  Checkpoint  %s\n' "$(tf_out detector_checkpoint)"
 
-  if [ -f "$DBX/terraform.tfvars" ]; then
-    printf '  Detector    %s\n' "$([ "$(tf_out "$DBX" detector_running)" = "true" ] && echo 'ON (job-cluster corriendo — cobra por hora)' || echo 'OFF (pausado — $0/hora)')"
-    printf '  Job         %s\n' "$(tf_out "$DBX" job_url)"
+  # El estado a nivel APP (`runningStatus`) no distingue una réplica sana de una que
+  # está en crash-loop: las dos figuran como "Running". Lo que sí lo distingue es la
+  # REVISIÓN: su healthState y su cantidad de réplicas activas. Sin esto, "no aparecen
+  # zonas rojas" se diagnostica adivinando.
+  #
+  # `az rest` es az core (no necesita la extensión `containerapp`).
+  say "Revisiones del detector (acá se ve un crash-loop)"
+  az rest --method get \
+    --url "https://management.azure.com${app_id}/revisions?api-version=${ACA_API}" \
+    --query 'value[].{revision:name, activa:properties.active, replicas:properties.replicas, estado:properties.runningState, salud:properties.healthState}' \
+    -o table 2>/dev/null || warn "No pude leer las revisiones."
+
+  if [ "$want" = "true" ] && [ "$live_min" = "0" ]; then
+    warn "Terraform lo quiere PRENDIDO pero Azure lo tiene en 0 réplicas.
+     Lo apagó algo por afuera — casi seguro el KILL-SWITCH del presupuesto.
+     Mirá cuánto gastaste ANTES de volver a encenderlo con make detector-start."
   fi
+
+  cat <<EOF
+
+  ${bold}Logs del detector${off} (si no hay zonas rojas, empezá acá):
+
+    az containerapp logs show -n ${app_name} -g ${app_rg} --follow --tail 100
+
+  La primera vez az instala la extensión \`containerapp\` solo. Buscá el banner
+  "RED-POINT DETECTOR — CONTAINER START": si aparece más de una vez, el contenedor
+  se reinició.
+
+  ${bold}Lo que está cobrando ahora mismo:${off} la VM (~\$0.126/h, si está running),
+  Event Hubs (~\$0.015/h), el registro (~\$5/mes) y — solo si min_replicas=1 — el
+  detector. Apagar el detector NO deja el gasto en \$0: eso lo hace \`make deploy-down\`.
+
+EOF
 }
 
 cmd_vm_stop() {
@@ -360,61 +514,33 @@ cmd_vm_stop() {
 cmd_vm_start() {
   say "Arrancando la VM"
   az vm start -g "$VM_RG" -n "$VM_NAME"
-  ok "VM arriba en http://$(tf_out "$INFRA" vm_public_ip)"
+  ok "VM arriba en http://$(tf_out vm_public_ip)"
 }
 
 cmd_down() {
-  say "Destruyendo TODO (Databricks primero, después la infra)"
-  if [ -f "$DBX/terraform.tfvars" ]; then
-    # shellcheck disable=SC2046
-    terraform -chdir="$DBX" destroy $(apply_args)
-  fi
+  say "Destruyendo TODO"
   # shellcheck disable=SC2046
   terraform -chdir="$INFRA" destroy $(apply_args)
   rm -f "$ENV_OUT"
 
-  # `terraform destroy` sale en verde y deja basura: el managed RG de Databricks no es
-  # suyo, así que no lo toca. Borrar el workspace se lleva el NAT gateway y su IP (lo
-  # que cobra por hora), pero SOBREVIVEN el storage de DBFS y el access connector de
-  # Unity Catalog — y con ellos ahí, el próximo workspace no se puede crear.
-  purge_databricks_managed_rg
-
+  # Sin Databricks no queda nada huérfano que limpiar: el registro y sus imágenes se van
+  # con el resource group, y el `rg-metaverso-databricks-managed` que `terraform destroy`
+  # nunca borraba (y que bloqueaba el deploy siguiente) ya no existe.
   ok "No queda nada corriendo en Azure"
-}
-
-# Idempotente: si el RG no existe, no hace nada.
-#
-# Solo se puede borrar con el workspace YA destruido: mientras vive, Databricks protege su
-# managed RG con una deny assignment del sistema que rechaza el borrado incluso al dueño de
-# la suscripción (no es un problema de permisos: no hay rol que lo habilite).
-purge_databricks_managed_rg() {
-  az group show -n "$DBX_MANAGED_RG" >/dev/null 2>&1 || return 0
-
-  if databricks_workspace_exists; then
-    warn "$DBX_MANAGED_RG sigue protegido por el workspace $DBX_WORKSPACE: no se puede borrar hasta que el workspace no exista."
-    return 0
-  fi
-
-  say "Limpiando el resource group que Databricks deja huérfano ($DBX_MANAGED_RG)"
-  if az group delete -n "$DBX_MANAGED_RG" --yes --no-wait; then
-    ok "Borrado lanzado (Azure lo completa en segundo plano)"
-  else
-    warn "No pude borrar $DBX_MANAGED_RG. Borralo a mano antes del próximo deploy o el workspace no se va a poder crear:
-       az group delete -n $DBX_MANAGED_RG --yes"
-  fi
 }
 
 usage() {
   cat <<EOF
 Uso: ./scripts/deploy-azure.sh <comando> [-y] [--force]
 
-  up        Despliega todo: infra + app en la VM + job del detector (pausado)
-  start     Enciende el detector (arranca el job-cluster de Databricks)
-  stop      Apaga el detector (termina el cluster: \$0/hora)
-  status    IP, web, estado de la VM y del detector
-  vm-stop   Desasigna la VM (deja de cobrar sus ~\$30/mes)
+  up        Despliega todo: infra + app en la VM + contenedor del detector (apagado)
+  start     Enciende el detector (1 réplica — levanta en segundos)
+  stop      Apaga el detector (0 réplicas — el contenedor deja de cobrar)
+  status    IP, web, VM, réplicas del detector y salud de sus revisiones
+  guard     Verifica que un apply no vaya a revertir el kill-switch (lo usa make infra-apply)
+  vm-stop   Desasigna la VM (deja de cobrar sus ~\$0.126/h)
   vm-start  Vuelve a prender la VM
-  down      terraform destroy de las dos etapas
+  down      terraform destroy de todo (lo único que deja el gasto en \$0)
 
   -y        No pedir confirmación en apply/destroy
   --force   Desplegar aunque el HEAD local no esté pusheado
@@ -422,7 +548,8 @@ Uso: ./scripts/deploy-azure.sh <comando> [-y] [--force]
 Variables opcionales:
   BUDGET_EMAIL=...          email de la alerta de presupuesto
   SSH_PUBLIC_KEY_FILE=...   llave pública para la VM (default ~/.ssh/id_ed25519.pub)
-  ENABLE_ARCHIVE=true       archivar el histórico de posiciones en ADLS
+  ENABLE_ARCHIVE=true       archivar el histórico crudo de posiciones en ADLS
+                            (ojo: si ese stream falla, se cae el detector con él)
 EOF
 }
 
@@ -442,6 +569,7 @@ case "$cmd" in
   start)     cmd_start ;;
   stop)      cmd_stop ;;
   status)    cmd_status ;;
+  guard)     killswitch_guard; ok "El apply no revierte ningún corte de gasto" ;;
   vm-stop)   cmd_vm_stop ;;
   vm-start)  cmd_vm_start ;;
   down)      cmd_down ;;

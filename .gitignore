@@ -13,9 +13,14 @@ logs/
 infra/.terraform/
 infra/*.tfstate*
 infra/terraform.tfvars
-infra/databricks/.terraform/
-infra/databricks/*.tfstate*
-infra/databricks/terraform.tfvars
+# Detector calibration, regenerated from env/env.prod.example on every deploy
+infra/detector.auto.tfvars
+
+# v1 (Databricks) leftovers. The module is gone from the repo, but a machine that
+# deployed v1 still has its STATE and its tfvars on disk — and that tfvars holds the
+# Event Hubs connection string. Keep them ignored so they can never be committed by a
+# stray `git add -A`; delete the directory by hand once the v1 stack is destroyed.
+infra/databricks/
 
 # Prod profile rendered from the Terraform outputs (holds the Event Hubs key)
 .env.azure

@@ -2,23 +2,31 @@
 #
 # Stops everything that bills per hour and leaves everything else intact:
 #   1. Deallocates the app VM (a merely "stopped" VM keeps billing; deallocated does not).
-#   2. Pauses every Databricks job, which terminates its job cluster.
-#   3. Terminates any interactive cluster somebody left running by hand.
+#   2. Scales the detector Container App to min_replicas = 0, which is the same switch
+#      `make detector-stop` uses: zero replicas means no container and $0/hour.
 #
-# Nothing is deleted. Redeploying the demo is `make detector-start` + vm-start.
+# Nothing is deleted. Bringing the demo back is `make detector-start` + vm-start.
 #
-# Pausing (not just cancelling) is the point: the detector is a CONTINUOUS job, so
-# Databricks restarts a cancelled run by itself and the cluster — and the bill — comes
-# straight back. Pause first, then cancel what is still in flight.
+# WHY the raw ARM REST API instead of `Update-AzContainerApp`: an Azure Automation Account
+# ships with Az.Accounts, Az.Compute, Az.Resources and friends — but NOT with Az.App. Using
+# the cmdlet would mean importing that module into the Automation Account (an extra resource,
+# a slow import, and a dependency chain that breaks quietly). The REST call needs nothing but
+# a token from Az.Accounts, which is always there. It is also exactly the idiom the v1 runbook
+# already used to reach the Databricks Jobs API.
+#
+# WHY a PATCH with only the scale block: the Container Apps PATCH is a JSON Merge Patch
+# (RFC 7386), so nested objects merge instead of replacing. Sending just
+# properties.template.scale.minReplicas leaves the containers, the image, the secrets and the
+# env untouched — this must not be able to mangle the app it is trying to save.
 
 $ErrorActionPreference = 'Continue'
 
 Disable-AzContextAutosave -Scope Process | Out-Null
 Connect-AzAccount -Identity | Out-Null
 
-$vmRg   = Get-AutomationVariable -Name 'VmResourceGroup'
-$vmName = Get-AutomationVariable -Name 'VmName'
-$dbxUrl = Get-AutomationVariable -Name 'DatabricksUrl'
+$vmRg          = Get-AutomationVariable -Name 'VmResourceGroup'
+$vmName        = Get-AutomationVariable -Name 'VmName'
+$detectorAppId = Get-AutomationVariable -Name 'DetectorAppId'
 
 Write-Output "KILL-SWITCH: budget threshold reached. Shutting down billable compute."
 
@@ -27,41 +35,23 @@ Write-Output "Deallocating VM $vmName ($vmRg)..."
 Stop-AzVM -ResourceGroupName $vmRg -Name $vmName -Force
 Write-Output "VM deallocated."
 
-# --- 2. Databricks --------------------------------------------------------
-# The managed identity is Contributor on the workspace's resource group, which makes
-# it a workspace admin in Azure Databricks. This is the AAD app id of Azure Databricks.
-$token = (Get-AzAccessToken -ResourceUrl '2ff814a6-3304-4ab8-85cb-cd0e6f879c1d').Token
+# --- 2. The detector container --------------------------------------------
+# Az.Accounts >= 5 returns the token as a SecureString; older versions return a plain
+# string. The Automation Account's module version is not ours to pin, so handle both.
+$tokenResponse = Get-AzAccessToken -ResourceUrl 'https://management.azure.com/'
+if ($tokenResponse.Token -is [System.Security.SecureString]) {
+    $token = [System.Net.NetworkCredential]::new('', $tokenResponse.Token).Password
+} else {
+    $token = $tokenResponse.Token
+}
+
 $headers = @{ Authorization = "Bearer $token" }
+$uri     = "https://management.azure.com$detectorAppId" + "?api-version=2024-03-01"
+$body    = @{ properties = @{ template = @{ scale = @{ minReplicas = 0 } } } } | ConvertTo-Json -Depth 5
 
-$jobs = Invoke-RestMethod -Uri "$dbxUrl/api/2.1/jobs/list?limit=25" -Headers $headers -Method Get
-foreach ($job in $jobs.jobs) {
-    $body = @{
-        job_id       = $job.job_id
-        new_settings = @{ continuous = @{ pause_status = 'PAUSED' } }
-    } | ConvertTo-Json -Depth 5
-    Invoke-RestMethod -Uri "$dbxUrl/api/2.1/jobs/update" -Headers $headers -Method Post `
-        -Body $body -ContentType 'application/json'
-    Write-Output "Paused job $($job.job_id) ($($job.settings.name))."
-}
-
-$runs = Invoke-RestMethod -Uri "$dbxUrl/api/2.1/jobs/runs/list?active_only=true" -Headers $headers -Method Get
-foreach ($run in $runs.runs) {
-    $body = @{ run_id = $run.run_id } | ConvertTo-Json
-    Invoke-RestMethod -Uri "$dbxUrl/api/2.1/jobs/runs/cancel" -Headers $headers -Method Post `
-        -Body $body -ContentType 'application/json'
-    Write-Output "Cancelled run $($run.run_id)."
-}
-
-# --- 3. Stray interactive clusters ---------------------------------------
-$clusters = Invoke-RestMethod -Uri "$dbxUrl/api/2.0/clusters/list" -Headers $headers -Method Get
-foreach ($cluster in $clusters.clusters) {
-    if ($cluster.state -in @('RUNNING', 'PENDING', 'RESIZING')) {
-        $body = @{ cluster_id = $cluster.cluster_id } | ConvertTo-Json
-        # "delete" in the Clusters API means TERMINATE, not destroy.
-        Invoke-RestMethod -Uri "$dbxUrl/api/2.0/clusters/delete" -Headers $headers -Method Post `
-            -Body $body -ContentType 'application/json'
-        Write-Output "Terminated cluster $($cluster.cluster_id)."
-    }
-}
+Write-Output "Scaling the detector container to 0 replicas ($detectorAppId)..."
+$updated = Invoke-RestMethod -Uri $uri -Headers $headers -Method Patch `
+    -Body $body -ContentType 'application/json'
+Write-Output "Detector min_replicas is now $($updated.properties.template.scale.minReplicas)."
 
 Write-Output "KILL-SWITCH: done. Per-hour cost is now ~0. Nothing was deleted."

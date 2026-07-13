@@ -2,7 +2,16 @@
 #
 # An Azure budget does NOT stop spending; it only notifies. To actually cut the bill,
 # the budget notifies an action group, which fires a webhook into an Automation runbook
-# that deallocates the VM and pauses the Databricks jobs (see killswitch.ps1).
+# that stops the two things that bill per hour (see killswitch.ps1):
+#
+#   1. deallocates the app VM;
+#   2. scales the detector Container App down to min_replicas = 0 — the same switch
+#      `make detector-stop` uses.
+#
+# Step 2 replaces v1's "pause the Databricks jobs". Getting it wrong would have been
+# worse than useless: the kill-switch would have shut down the VM and left the detector
+# container running, which is precisely the thing that bills by the hour. A cost guard
+# that does not stop the cost is not a guard.
 #
 # ⚠️ Azure cost data lags by hours. The kill-switch is a SAFETY NET, not a hard cap:
 # by the time the budget sees $40, real spend may already be higher. The actual brake
@@ -49,32 +58,74 @@ resource "azurerm_automation_variable_string" "vm_name" {
   value                   = azurerm_linux_virtual_machine.app.name
 }
 
-resource "azurerm_automation_variable_string" "databricks_url" {
+# The runbook reaches the Container App through the ARM API, so the full resource ID is
+# all it needs — no workspace URL, no per-service SDK. (v1 stored a DatabricksUrl here.)
+resource "azurerm_automation_variable_string" "detector_app_id" {
   count = var.enable_killswitch ? 1 : 0
 
-  name                    = "DatabricksUrl"
+  name                    = "DetectorAppId"
   resource_group_name     = azurerm_resource_group.governance.name
   automation_account_name = azurerm_automation_account.killswitch[0].name
-  value                   = "https://${azurerm_databricks_workspace.detector.workspace_url}"
+  value                   = azurerm_container_app.detector.id
 }
 
-# Permissions: scoped to the two resource groups it must act on, not the subscription.
-# Contributor on the Databricks workspace's RG also makes the identity a workspace admin
-# in Azure Databricks, which is what lets the runbook call the Jobs API.
+# Permissions: a custom role with FOUR actions, not Contributor.
+#
+# Contributor at RG scope was the easy answer and the wrong one. rg-analytics now holds
+# the container registry, the Container Apps environment and the detector app itself, so
+# Contributor there would let a WEBHOOK-REACHABLE identity — the budget action group
+# calls it over a URL — delete the registry, rewrite the app's image, or read its
+# secrets. killswitch.ps1 says in its own header that it must not be able to mangle the
+# app it is trying to save; the RBAC grant has to agree with that sentence.
+#
+# What the runbook actually does is deallocate one VM and set one integer. That is all
+# it gets:
+#
+#   virtualMachines/read + deallocate/action   Stop-AzVM does a GET then a POST
+#   containerApps/read  + write                the ARM PATCH that sets minReplicas
+#
+# On `containerApps/write`: ARM has no scale-only data action, and PATCH is a write. So
+# write is the floor, not a compromise we chose. What the scoping DOES buy is that the
+# blast radius stops at the Container App — the registry, the environment and the
+# Log Analytics workspace in the same group are now out of reach entirely.
+resource "azurerm_role_definition" "killswitch" {
+  count = var.enable_killswitch ? 1 : 0
+
+  name        = "${var.project_name}-killswitch"
+  scope       = data.azurerm_subscription.current.id
+  description = "Deallocate the app VM and scale the detector Container App to zero. Nothing else."
+
+  permissions {
+    actions = [
+      "Microsoft.Compute/virtualMachines/read",
+      "Microsoft.Compute/virtualMachines/deallocate/action",
+      "Microsoft.App/containerApps/read",
+      "Microsoft.App/containerApps/write",
+    ]
+    not_actions = []
+  }
+
+  # Where the role may be USED. Narrower than where it is defined.
+  assignable_scopes = [
+    azurerm_resource_group.app.id,
+    azurerm_resource_group.analytics.id,
+  ]
+}
+
 resource "azurerm_role_assignment" "killswitch_app" {
   count = var.enable_killswitch ? 1 : 0
 
-  scope                = azurerm_resource_group.app.id
-  role_definition_name = "Contributor"
-  principal_id         = azurerm_automation_account.killswitch[0].identity[0].principal_id
+  scope              = azurerm_resource_group.app.id
+  role_definition_id = azurerm_role_definition.killswitch[0].role_definition_resource_id
+  principal_id       = azurerm_automation_account.killswitch[0].identity[0].principal_id
 }
 
 resource "azurerm_role_assignment" "killswitch_analytics" {
   count = var.enable_killswitch ? 1 : 0
 
-  scope                = azurerm_resource_group.analytics.id
-  role_definition_name = "Contributor"
-  principal_id         = azurerm_automation_account.killswitch[0].identity[0].principal_id
+  scope              = azurerm_resource_group.analytics.id
+  role_definition_id = azurerm_role_definition.killswitch[0].role_definition_resource_id
+  principal_id       = azurerm_automation_account.killswitch[0].identity[0].principal_id
 }
 
 resource "azurerm_automation_runbook" "killswitch" {
@@ -87,9 +138,9 @@ resource "azurerm_automation_runbook" "killswitch" {
   runbook_type            = "PowerShell"
   log_progress            = true
   log_verbose             = true
-  description             = "Deallocates the app VM and pauses the Databricks jobs when the budget is hit"
+  description             = "Deallocates the app VM and scales the detector container to zero replicas when the budget is hit"
   content                 = file("${path.module}/killswitch.ps1")
-  tags                    = merge(local.tags, { proposito = "El script que desasigna la VM y pausa los jobs de Databricks" })
+  tags                    = merge(local.tags, { proposito = "El script que desasigna la VM y apaga el contenedor del detector" })
 }
 
 resource "azurerm_automation_webhook" "killswitch" {
