@@ -1,11 +1,11 @@
 <mxfile host="app.diagrams.net" agent="architecture" version="24.0.0">
   <diagram id="prod-azure" name="Producción (Azure)">
-    <mxGraphModel dx="1422" dy="798" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="2420" pageHeight="1680" math="0" shadow="0">
+    <mxGraphModel dx="1422" dy="798" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="2420" pageHeight="1950" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
 
-        <mxCell id="title" value="ARQUITECTURA DE PRODUCCIÓN — Detección de zonas rojas en un metaverso mediante Big Data en tiempo real&lt;br&gt;&lt;span style=&quot;font-size:12px;font-weight:normal&quot;&gt;Fiel al código: todo lo que aparece acá lo declara infra/ (Terraform), salvo el bloque rojo, que lo crea Databricks por su cuenta. Región: eastus2.&lt;/span&gt;" style="text;html=1;align=center;verticalAlign=middle;fontSize=20;fontStyle=1;whiteSpace=wrap;" vertex="1" parent="1">
+        <mxCell id="title" value="ARQUITECTURA DE PRODUCCIÓN — Detección de zonas rojas en un metaverso mediante Big Data en tiempo real&lt;br&gt;&lt;span style=&quot;font-size:12px;font-weight:normal&quot;&gt;Fiel al código: todo lo que aparece acá lo declara infra/ (Terraform). Seis resource groups, UNA sola etapa de apply, ningún recurso huérfano. Región: eastus2.&lt;/span&gt;" style="text;html=1;align=center;verticalAlign=middle;fontSize=20;fontStyle=1;whiteSpace=wrap;" vertex="1" parent="1">
           <mxGeometry x="40" y="20" width="2340" height="60" as="geometry" />
         </mxCell>
 
@@ -16,7 +16,7 @@
           <mxGeometry x="40" y="200" width="250" height="220" as="geometry" />
         </mxCell>
 
-        <mxCell id="sub" value="SUSCRIPCIÓN AZURE FOR STUDENTS ($100 / 12 meses, sin tarjeta) — región eastus2 — 6 resource groups provisionados con Terraform (infra/)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#0078d4;strokeWidth=2;verticalAlign=top;fontSize=13;fontStyle=1;spacingTop=8;dashed=1;" vertex="1" parent="1">
+        <mxCell id="sub" value="SUSCRIPCIÓN AZURE FOR STUDENTS ($100 / 12 meses, sin tarjeta) — región eastus2 — 6 resource groups, uno por ROL del pipeline, todos provisionados con Terraform (infra/)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#0078d4;strokeWidth=2;verticalAlign=top;fontSize=13;fontStyle=1;spacingTop=8;dashed=1;" vertex="1" parent="1">
           <mxGeometry x="330" y="140" width="2050" height="1230" as="geometry" />
         </mxCell>
 
@@ -33,7 +33,7 @@
           <mxGeometry x="385" y="420" width="280" height="55" as="geometry" />
         </mxCell>
 
-        <mxCell id="rg-app" value="rg-metaverso-app&lt;br&gt;&lt;span style=&quot;font-size:10px;font-weight:normal&quot;&gt;La VM que sirve el metaverso&lt;/span&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f0f6fc;strokeColor=#0078d4;verticalAlign=top;fontSize=12;fontStyle=1;spacingTop=4;dashed=1;" vertex="1" parent="1">
+        <mxCell id="rg-app" value="rg-metaverso-app&lt;br&gt;&lt;span style=&quot;font-size:10px;font-weight:normal&quot;&gt;La VM que sirve el metaverso — la ÚNICA VM del despliegue&lt;/span&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f0f6fc;strokeColor=#0078d4;verticalAlign=top;fontSize=12;fontStyle=1;spacingTop=4;dashed=1;" vertex="1" parent="1">
           <mxGeometry x="360" y="520" width="330" height="400" as="geometry" />
         </mxCell>
         <mxCell id="vm" value="vm-metaverso-app&lt;br&gt;&lt;b&gt;Standard_E2s_v3&lt;/b&gt; (2 vCPU) · Ubuntu 22.04&lt;br&gt;&lt;br&gt;cloud-init clona el repo y levanta:&lt;br&gt;• nginx :80 → cliente Vite/Three.js&lt;br&gt;• bun :8080 → servidor autoritativo&lt;br&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;(systemd: metaverse-server)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;verticalAlign=top;spacingTop=4;" vertex="1" parent="1">
@@ -50,98 +50,91 @@
         </mxCell>
 
         <mxCell id="rg-streaming" value="rg-metaverso-streaming&lt;br&gt;&lt;span style=&quot;font-size:10px;font-weight:normal&quot;&gt;El transporte de eventos&lt;/span&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f0f6fc;strokeColor=#0078d4;verticalAlign=top;fontSize=12;fontStyle=1;spacingTop=4;dashed=1;" vertex="1" parent="1">
-          <mxGeometry x="730" y="230" width="420" height="690" as="geometry" />
+          <mxGeometry x="730" y="230" width="400" height="690" as="geometry" />
         </mxCell>
         <mxCell id="evhns" value="evhns-metaverso-&amp;lt;sufijo&amp;gt;&lt;br&gt;&lt;b&gt;Event Hubs — tier Standard, 1 TU&lt;/b&gt;&lt;br&gt;Kafka administrado · puerto 9093 · SASL_SSL&lt;br&gt;&lt;span style=&quot;font-size:10px&quot;&gt;Basic NO habla Kafka. Standard topea en 10 hubs.&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="1">
-          <mxGeometry x="755" y="290" width="370" height="80" as="geometry" />
+          <mxGeometry x="755" y="290" width="350" height="80" as="geometry" />
         </mxCell>
-        <mxCell id="hub-pos" value="hub: avatar-positions&lt;br&gt;4 particiones · retención 1 día&lt;br&gt;&lt;span style=&quot;font-size:10px&quot;&gt;ENTRADA: telemetría de cada avatar&lt;br&gt;consumer group: spark-detector&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#333333;strokeColor=#000000;fontColor=#ffffff;fontSize=11;" vertex="1" parent="1">
-          <mxGeometry x="755" y="385" width="370" height="90" as="geometry" />
+        <mxCell id="hub-pos" value="hub: avatar-positions&lt;br&gt;4 particiones · &lt;b&gt;retención 7 días&lt;/b&gt;&lt;br&gt;&lt;span style=&quot;font-size:10px&quot;&gt;ENTRADA: telemetría de cada avatar&lt;br&gt;&lt;b&gt;Sin consumer group declarado&lt;/b&gt;: el source de Kafka de&lt;br&gt;Spark genera el suyo (spark-kafka-source-&amp;lt;uuid&amp;gt;) y&lt;br&gt;guarda los offsets en SU checkpoint, no en el broker.&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#333333;strokeColor=#000000;fontColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="755" y="385" width="350" height="105" as="geometry" />
         </mxCell>
-        <mxCell id="hub-sim" value="hub: sim-events&lt;br&gt;1 partición · retención 1 día&lt;br&gt;&lt;span style=&quot;font-size:10px&quot;&gt;INTERNO: los 11 topics de simulación viajan&lt;br&gt;consolidados acá (el topic lógico va DENTRO&lt;br&gt;del mensaje) — no entran 13 hubs en Standard&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#333333;strokeColor=#000000;fontColor=#ffffff;fontSize=11;" vertex="1" parent="1">
-          <mxGeometry x="755" y="490" width="370" height="100" as="geometry" />
+        <mxCell id="hub-sim" value="hub: sim-events&lt;br&gt;1 partición · retención 7 días&lt;br&gt;&lt;span style=&quot;font-size:10px&quot;&gt;INTERNO: los 11 topics de simulación viajan&lt;br&gt;consolidados acá (el topic lógico va DENTRO&lt;br&gt;del mensaje) — no entran 13 hubs en Standard&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#333333;strokeColor=#000000;fontColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="755" y="505" width="350" height="100" as="geometry" />
         </mxCell>
-        <mxCell id="hub-red" value="hub: red-points&lt;br&gt;1 partición · retención 1 día&lt;br&gt;&lt;span style=&quot;font-size:10px&quot;&gt;SALIDA: zonas rojas detectadas&lt;br&gt;consumer group: metaverse-backend&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#333333;strokeColor=#000000;fontColor=#ffffff;fontSize=11;" vertex="1" parent="1">
-          <mxGeometry x="755" y="605" width="370" height="90" as="geometry" />
+        <mxCell id="hub-red" value="hub: red-points&lt;br&gt;1 partición · retención 7 días&lt;br&gt;&lt;span style=&quot;font-size:10px&quot;&gt;SALIDA: zonas rojas detectadas&lt;br&gt;El backend consume con un consumer group EFÍMERO por&lt;br&gt;proceso (ecci-redpoints-&amp;lt;pid&amp;gt;-&amp;lt;ts&amp;gt;): las zonas rojas son estado&lt;br&gt;VIVO con TTL, y un offset commiteado las resucitaría al reiniciar.&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#333333;strokeColor=#000000;fontColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="755" y="620" width="350" height="110" as="geometry" />
         </mxCell>
-        <mxCell id="authrule" value="app-access (regla de autorización del namespace)&lt;br&gt;&lt;span style=&quot;font-size:10px&quot;&gt;listen + send. Una sola connection string para la VM y para Spark.&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="1">
-          <mxGeometry x="755" y="710" width="370" height="60" as="geometry" />
+        <mxCell id="authrule" value="app-access (regla de autorización del namespace)&lt;br&gt;&lt;span style=&quot;font-size:10px&quot;&gt;listen + send. Una sola connection string para la VM y para el detector.&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="755" y="745" width="350" height="55" as="geometry" />
         </mxCell>
         <mxCell id="contract" value="CONTRATO DE DATOS (JSON)&lt;br&gt;&lt;br&gt;avatar-positions → { avatarId, x, y, speed, ts }&lt;br&gt;red-points → { cellX, cellY, centerX, centerY,&lt;br&gt;&amp;nbsp;&amp;nbsp;stationaryAvatars, windowStart, windowEnd }" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=10;align=left;spacingLeft=8;verticalAlign=top;spacingTop=6;" vertex="1" parent="1">
-          <mxGeometry x="755" y="790" width="370" height="110" as="geometry" />
+          <mxGeometry x="755" y="810" width="350" height="95" as="geometry" />
         </mxCell>
 
-        <mxCell id="rg-analytics" value="rg-metaverso-analytics&lt;br&gt;&lt;span style=&quot;font-size:10px;font-weight:normal&quot;&gt;El procesamiento&lt;/span&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f0f6fc;strokeColor=#0078d4;verticalAlign=top;fontSize=12;fontStyle=1;spacingTop=4;dashed=1;" vertex="1" parent="1">
-          <mxGeometry x="1190" y="230" width="400" height="340" as="geometry" />
+        <mxCell id="rg-analytics" value="rg-metaverso-analytics&lt;br&gt;&lt;span style=&quot;font-size:10px;font-weight:normal&quot;&gt;El procesamiento: el detector, containerizado&lt;/span&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f0f6fc;strokeColor=#0078d4;verticalAlign=top;fontSize=12;fontStyle=1;spacingTop=4;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="1240" y="230" width="500" height="690" as="geometry" />
         </mxCell>
-        <mxCell id="dbw" value="dbw-metaverso-detector&lt;br&gt;&lt;span style=&quot;font-size:10px&quot;&gt;Azure Databricks — SKU premium (Azure retiró Standard)&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="1">
-          <mxGeometry x="1215" y="290" width="350" height="60" as="geometry" />
+        <mxCell id="acr" value="cr&amp;lt;metaverso&amp;gt;&amp;lt;sufijo&amp;gt;&lt;br&gt;&lt;b&gt;Azure Container Registry (Basic, ~$5/mes)&lt;/b&gt;&lt;br&gt;&lt;span style=&quot;font-size:10px&quot;&gt;La imagen se construye con &lt;b&gt;az acr build&lt;/b&gt;: DENTRO de Azure. No es una&lt;br&gt;preferencia — en la caja de desarrollo no hay Docker ni Podman.&lt;br&gt;El tag es el HASH del contenido (Dockerfile + detector + entrypoint):&lt;br&gt;tocar el detector = tag nuevo = revisión nueva. Sin cambios, no rebuildea.&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1265" y="290" width="450" height="110" as="geometry" />
         </mxCell>
-        <mxCell id="job" value="job: red-point-detector&lt;br&gt;pipeline/red_point_detector.py&lt;br&gt;&lt;br&gt;&lt;b&gt;Job CONTINUO&lt;/b&gt; sobre job-cluster single-node&lt;br&gt;&lt;b&gt;Standard_D4s_v3&lt;/b&gt; (4 vCPU)&lt;br&gt;&lt;br&gt;Spark Structured Streaming:&lt;br&gt;1. Filtra avatares detenidos (speed ≈ 0)&lt;br&gt;2. Mapea (x,y) → celda 30×30, origen (-240,-195)&lt;br&gt;3. Ventana 10 s, se recalcula cada 5 s&lt;br&gt;4. ≥ 7 avatares quietos, permanencia ≥ 5 s → ZONA ROJA&lt;br&gt;&lt;br&gt;&lt;b&gt;Se crea PAUSADO&lt;/b&gt; — pausado = cluster apagado = $0/h" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=11;align=left;spacingLeft=8;verticalAlign=top;spacingTop=6;" vertex="1" parent="1">
-          <mxGeometry x="1215" y="360" width="350" height="190" as="geometry" />
+        <mxCell id="mi" value="id-metaverso-detector&lt;br&gt;&lt;span style=&quot;font-size:10px&quot;&gt;Managed identity (user-assigned) con rol &lt;b&gt;AcrPull&lt;/b&gt; sobre el registro.&lt;br&gt;El contenedor baja su imagen con ella: no hay contraseña de registro&lt;br&gt;en ningún lado — ni en el estado de Terraform, ni en una shell.&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1265" y="410" width="450" height="75" as="geometry" />
+        </mxCell>
+        <mxCell id="cae" value="cae-metaverso — Container Apps Environment&lt;br&gt;&lt;span style=&quot;font-size:10px&quot;&gt;El entorno serverless donde vive el contenedor (plan Consumption)&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1265" y="495" width="450" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="ca" value="ca-metaverso-detector&lt;br&gt;&lt;b&gt;Container App — sin ingress&lt;/b&gt; (es un worker de fondo)&lt;br&gt;&lt;b&gt;2 vCPU / 4 GiB&lt;/b&gt; · max_replicas = 1&lt;br&gt;&lt;span style=&quot;font-size:10px&quot;&gt;max = 1 porque la query es stateful y single-node: dos réplicas serían&lt;br&gt;dos detectores emitiendo las mismas zonas rojas.&lt;/span&gt;&lt;br&gt;&lt;br&gt;Corre el MISMO &lt;b&gt;pipeline/red_point_detector.py&lt;/b&gt; — Spark Structured Streaming:&lt;br&gt;1. Filtra avatares detenidos (speed ≈ 0)&lt;br&gt;2. Mapea (x,y) → celda 30×30, origen (-240,-195)&lt;br&gt;3. Ventana 10 s, se recalcula cada 5 s&lt;br&gt;4. ≥ 7 avatares quietos, permanencia ≥ 5 s → ZONA ROJA&lt;br&gt;&lt;br&gt;&lt;b&gt;min_replicas ES EL INTERRUPTOR DE LA DEMO:&lt;/b&gt;&lt;br&gt;&lt;b&gt;0&lt;/b&gt; = no hay contenedor = &lt;b&gt;$0/hora&lt;/b&gt;&amp;nbsp;&amp;nbsp;·&amp;nbsp;&amp;nbsp;&lt;b&gt;1&lt;/b&gt; = detector ON, arriba en &lt;b&gt;SEGUNDOS&lt;/b&gt;&lt;br&gt;&lt;span style=&quot;font-size:10px&quot;&gt;(make detector-start / make detector-stop lo mueven vía Terraform)&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=11;align=left;spacingLeft=8;verticalAlign=top;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="1265" y="555" width="450" height="250" as="geometry" />
+        </mxCell>
+        <mxCell id="loga" value="log-metaverso-detector — Log Analytics&lt;br&gt;&lt;span style=&quot;font-size:10px&quot;&gt;El stdout del contenedor es la ÚNICA ventana a la consulta de streaming.&lt;br&gt;El entrypoint imprime un banner al arrancar: si aparece dos veces, el contenedor se reinició.&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1265" y="820" width="450" height="70" as="geometry" />
         </mxCell>
 
-        <mxCell id="rg-datalake" value="rg-metaverso-datalake&lt;br&gt;&lt;span style=&quot;font-size:10px;font-weight:normal&quot;&gt;El archivo histórico&lt;/span&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f0f6fc;strokeColor=#0078d4;verticalAlign=top;fontSize=12;fontStyle=1;spacingTop=4;dashed=1;" vertex="1" parent="1">
-          <mxGeometry x="1190" y="610" width="400" height="310" as="geometry" />
+        <mxCell id="rg-datalake" value="rg-metaverso-datalake&lt;br&gt;&lt;span style=&quot;font-size:10px;font-weight:normal&quot;&gt;El estado del detector y el archivo histórico&lt;/span&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f0f6fc;strokeColor=#0078d4;verticalAlign=top;fontSize=12;fontStyle=1;spacingTop=4;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="1780" y="230" width="570" height="690" as="geometry" />
         </mxCell>
-        <mxCell id="adls" value="stmetaverso&amp;lt;sufijo&amp;gt;&lt;br&gt;&lt;b&gt;ADLS Gen2&lt;/b&gt; (Storage Account, LRS, HNS)&lt;br&gt;&lt;span style=&quot;font-size:10px&quot;&gt;El nombre no puede ser más descriptivo: Azure topea los&lt;br&gt;storage accounts en 24 caracteres, sin guiones.&lt;br&gt;El propósito va en el tag.&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="1">
-          <mxGeometry x="1215" y="670" width="350" height="100" as="geometry" />
+        <mxCell id="adls" value="stmetaverso&amp;lt;sufijo&amp;gt;&lt;br&gt;&lt;b&gt;ADLS Gen2&lt;/b&gt; (Storage Account, LRS, &lt;b&gt;is_hns_enabled = true&lt;/b&gt;)&lt;br&gt;&lt;span style=&quot;font-size:10px&quot;&gt;El nombre no puede ser más descriptivo: Azure topea los storage accounts&lt;br&gt;en 24 caracteres, sin guiones. El propósito va en el tag.&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1805" y="290" width="520" height="85" as="geometry" />
         </mxCell>
         <mxCell id="fs" value="filesystem: avatar-events" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="1">
-          <mxGeometry x="1215" y="785" width="350" height="40" as="geometry" />
+          <mxGeometry x="1805" y="385" width="520" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="archive-note" value="⚠ El archivado es OPT-IN (ENABLE_ARCHIVE=true). Apagado por defecto: sin credencial de storage en el cluster, el stream de archivo falla en su primer batch y se lleva puesto al de zonas rojas (awaitAnyTermination)." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;align=left;spacingLeft=8;" vertex="1" parent="1">
-          <mxGeometry x="1215" y="835" width="350" height="70" as="geometry" />
+        <mxCell id="ckpt" value="&lt;b&gt;checkpoints/red-point-detector&lt;/b&gt; — SIEMPRE&lt;br&gt;&lt;span style=&quot;font-size:10px&quot;&gt;El checkpoint de Spark: los offsets de Event Hubs y el estado de las ventanas.&lt;br&gt;NO es opt-in. Vive acá y no en el contenedor a propósito: si Container Apps&lt;br&gt;reinicia una réplica (OOM, evicción, mantenimiento), retoma desde los offsets&lt;br&gt;commiteados en vez de saltar a &quot;latest&quot; y abrir un agujero de detección mudo.&lt;br&gt;&lt;b&gt;Cambiar la ventana en prod es una MIGRACIÓN, no un &lt;i&gt;make clean&lt;/i&gt;.&lt;/b&gt;&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;align=left;spacingLeft=8;verticalAlign=top;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="1805" y="435" width="520" height="110" as="geometry" />
         </mxCell>
-
-        <mxCell id="rg-dbx" value="rg-metaverso-databricks-managed&lt;br&gt;&lt;span style=&quot;font-size:10px;font-weight:normal&quot;&gt;⚠ LO CREA DATABRICKS, NO TERRAFORM&lt;/span&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fdf2f2;strokeColor=#b85450;strokeWidth=2;verticalAlign=top;fontSize=12;fontStyle=1;spacingTop=4;dashed=1;" vertex="1" parent="1">
-          <mxGeometry x="1630" y="230" width="520" height="690" as="geometry" />
+        <mxCell id="positions" value="&lt;b&gt;positions/&lt;/b&gt; — OPT-IN (ENABLE_ARCHIVE=true)&lt;br&gt;&lt;span style=&quot;font-size:10px&quot;&gt;El archivo histórico crudo de posiciones, en Parquet: la pata &quot;Big Data&quot; del trabajo.&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;align=left;spacingLeft=8;verticalAlign=top;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="1805" y="555" width="520" height="60" as="geometry" />
         </mxCell>
-        <mxCell id="dbx-warn" value="Databricks crea su propio resource group al crear el workspace. Terraform no lo conoce y &lt;b&gt;terraform destroy no lo borra&lt;/b&gt;: sale en verde y deja esto atrás. Como su nombre deriva del nuestro, un resto BLOQUEA la creación del próximo workspace.&lt;br&gt;&lt;br&gt;→ scripts/deploy-azure.sh lo borra en &lt;b&gt;down&lt;/b&gt; y verifica que no queden restos en el &lt;b&gt;preflight&lt;/b&gt;." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=10;align=left;spacingLeft=8;verticalAlign=top;spacingTop=6;" vertex="1" parent="1">
-          <mxGeometry x="1655" y="290" width="470" height="115" as="geometry" />
+        <mxCell id="archive-note" value="⚠ El archivo está APAGADO por defecto, y no por timidez: el stream del archivo comparte &lt;b&gt;awaitAnyTermination()&lt;/b&gt; con el de zonas rojas, así que si falla en su primer batch se lleva puesto al DETECTOR. Encendelo sabiendo eso. (El checkpoint NO depende de este flag.)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;align=left;spacingLeft=8;verticalAlign=top;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="1805" y="625" width="520" height="70" as="geometry" />
         </mxCell>
-        <mxCell id="nat" value="nat-gateway&lt;br&gt;&lt;span style=&quot;font-size:10px&quot;&gt;La ÚNICA salida a internet&lt;br&gt;de los workers&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=11;" vertex="1" parent="1">
-          <mxGeometry x="1655" y="420" width="225" height="75" as="geometry" />
+        <mxCell id="hns-why" value="&lt;b&gt;¿Por qué is_hns_enabled = true?&lt;/b&gt; Un namespace jerárquico de verdad da &lt;b&gt;RENAME ATÓMICO&lt;/b&gt;, y eso no es un lujo: es la primitiva sobre la que está construido el protocolo de commit del checkpoint de Spark. El blob plano no puede darla — ahí el &quot;rename&quot; es copiar y borrar, y un fallo a mitad de camino deja el checkpoint corrupto.&lt;br&gt;&lt;br&gt;La imagen del detector trae el driver &lt;b&gt;hadoop-azure (ABFS)&lt;/b&gt;, que PySpark NO incluye: sin él, &lt;i&gt;abfss://&lt;/i&gt; no existe. En Databricks venía con el runtime y parecía gratis." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;fontSize=10;align=left;spacingLeft=8;verticalAlign=top;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="1805" y="705" width="520" height="125" as="geometry" />
         </mxCell>
-        <mxCell id="natip" value="nat-gw-public-ip&lt;br&gt;&lt;span style=&quot;font-size:10px&quot;&gt;IP de salida compartida (SNAT)&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=11;" vertex="1" parent="1">
-          <mxGeometry x="1895" y="420" width="230" height="75" as="geometry" />
-        </mxCell>
-        <mxCell id="nat-why" value="&lt;b&gt;¿Por qué hay un NAT gateway?&lt;/b&gt; Con &lt;i&gt;secure cluster connectivity&lt;/i&gt; (el default) los workers NO tienen IP pública y no aceptan nada entrante: son ELLOS los que abren un túnel SALIENTE al control plane de Databricks, y las órdenes bajan por ahí. Pero una VM sin IP pública no tiene forma de salir a internet — necesita SNAT. Ese es el NAT gateway.&lt;br&gt;&lt;br&gt;Sin esa salida el cluster ni se registra, y el job nunca arranca." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#b85450;fontSize=10;align=left;spacingLeft=8;verticalAlign=top;spacingTop=6;" vertex="1" parent="1">
-          <mxGeometry x="1655" y="505" width="470" height="130" as="geometry" />
-        </mxCell>
-        <mxCell id="workers" value="workers-vnet + workers-sg&lt;br&gt;&lt;span style=&quot;font-size:10px&quot;&gt;Red de los nodos del cluster (sin IP pública)&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=11;" vertex="1" parent="1">
-          <mxGeometry x="1655" y="645" width="470" height="55" as="geometry" />
-        </mxCell>
-        <mxCell id="dbfs" value="dbstorage&amp;lt;aleatorio&amp;gt; — DBFS root (ZRS)&lt;br&gt;&lt;span style=&quot;font-size:10px&quot;&gt;Storage interno OBLIGATORIO del workspace. No es opcional ni&lt;br&gt;configurable: por eso ves DOS storage accounts en la suscripción.&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=11;" vertex="1" parent="1">
-          <mxGeometry x="1655" y="710" width="470" height="65" as="geometry" />
-        </mxCell>
-        <mxCell id="ucc" value="unity-catalog-access-connector + dbmanagedidentity" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=11;" vertex="1" parent="1">
-          <mxGeometry x="1655" y="785" width="470" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="dbx-cost" value="💸 &lt;b&gt;El NAT gateway cobra ~$0.045/h mientras el workspace EXISTA&lt;/b&gt;, haya cluster o no. Se borra junto con el workspace. Lo que sobrevive al destroy (DBFS + connector) cuesta centavos, pero bloquea el redespliegue." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;align=left;spacingLeft=8;" vertex="1" parent="1">
-          <mxGeometry x="1655" y="835" width="470" height="70" as="geometry" />
+        <mxCell id="secrets-note" value="🔑 La connection string de Event Hubs y la clave de ADLS son &lt;b&gt;secrets de Container Apps&lt;/b&gt;, no env vars: un env var lo lee cualquiera con permiso de READER en el portal. El entrypoint vuelca la clave en spark-defaults.conf antes de arrancar el JVM, así que nunca pasa por una línea de comandos ni aparece en &lt;i&gt;ps&lt;/i&gt;." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;align=left;spacingLeft=8;verticalAlign=top;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="1805" y="840" width="520" height="65" as="geometry" />
         </mxCell>
 
         <mxCell id="rg-gov" value="rg-metaverso-governance — control de gasto (no sirve tráfico)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fffdf5;strokeColor=#d6b656;strokeWidth=2;verticalAlign=top;fontSize=12;fontStyle=1;spacingTop=6;dashed=1;" vertex="1" parent="1">
-          <mxGeometry x="360" y="960" width="1790" height="340" as="geometry" />
+          <mxGeometry x="360" y="960" width="1990" height="370" as="geometry" />
         </mxCell>
         <mxCell id="budget" value="budget-metaverso&lt;br&gt;&lt;span style=&quot;font-size:10px&quot;&gt;(a nivel suscripción)&lt;/span&gt;&lt;br&gt;&lt;br&gt;$10 → email de aviso&lt;br&gt;$30 (75%) → email&lt;br&gt;pronóstico &amp;gt; $40 → email&lt;br&gt;&lt;b&gt;$40 → email + KILL-SWITCH&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11;align=left;spacingLeft=10;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
-          <mxGeometry x="390" y="1020" width="330" height="160" as="geometry" />
+          <mxGeometry x="390" y="1020" width="330" height="190" as="geometry" />
         </mxCell>
         <mxCell id="ag" value="ag-metaverso-budget&lt;br&gt;&lt;span style=&quot;font-size:10px&quot;&gt;Action group&lt;/span&gt;&lt;br&gt;&lt;br&gt;Manda los emails&lt;br&gt;y llama al webhook" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11;" vertex="1" parent="1">
-          <mxGeometry x="770" y="1020" width="280" height="160" as="geometry" />
+          <mxGeometry x="770" y="1020" width="270" height="190" as="geometry" />
         </mxCell>
         <mxCell id="wh" value="wh-killswitch&lt;br&gt;&lt;span style=&quot;font-size:10px&quot;&gt;Webhook&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11;" vertex="1" parent="1">
-          <mxGeometry x="1100" y="1020" width="220" height="160" as="geometry" />
+          <mxGeometry x="1090" y="1020" width="200" height="190" as="geometry" />
         </mxCell>
         <mxCell id="aa" value="aa-metaverso-killswitch&lt;br&gt;&lt;span style=&quot;font-size:10px&quot;&gt;Automation Account (Basic)&lt;br&gt;runbook: Stop-BillableCompute&lt;/span&gt;&lt;br&gt;&lt;br&gt;&lt;span style=&quot;font-size:10px&quot;&gt;Va en eastus2 obligatoriamente: es la ÚNICA región que comparten la política de la suscripción y la lista de Automation para cuentas Student.&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11;" vertex="1" parent="1">
-          <mxGeometry x="1370" y="1020" width="340" height="160" as="geometry" />
+          <mxGeometry x="1340" y="1020" width="340" height="190" as="geometry" />
         </mxCell>
-        <mxCell id="effect" value="EFECTO&lt;br&gt;&lt;br&gt;• Desasigna la VM&lt;br&gt;&amp;nbsp;&amp;nbsp;(&quot;detenida&quot; sigue cobrando;&lt;br&gt;&amp;nbsp;&amp;nbsp;&lt;b&gt;desasignada&lt;/b&gt; no)&lt;br&gt;• &lt;b&gt;Pausa&lt;/b&gt; los jobs&lt;br&gt;&amp;nbsp;&amp;nbsp;(cancelar no alcanza: el job es&lt;br&gt;&amp;nbsp;&amp;nbsp;continuo y se reinicia solo)&lt;br&gt;&lt;br&gt;No borra nada." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=11;align=left;spacingLeft=10;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
-          <mxGeometry x="1760" y="1020" width="360" height="160" as="geometry" />
+        <mxCell id="effect" value="EFECTO — apaga lo que cobra por HORA&lt;br&gt;&lt;br&gt;• &lt;b&gt;Desasigna la VM&lt;/b&gt; (&quot;detenida&quot; sigue cobrando; desasignada no)&lt;br&gt;• &lt;b&gt;Escala ca-metaverso-detector a min_replicas = 0&lt;/b&gt; — el mismo interruptor que usa &lt;i&gt;make detector-stop&lt;/i&gt;&lt;br&gt;&lt;br&gt;No borra nada.&lt;br&gt;&lt;br&gt;&lt;span style=&quot;font-size:10px&quot;&gt;Lo hace con un &lt;b&gt;rol custom de 4 acciones&lt;/b&gt;, no con Contributor: virtualMachines read + deallocate, containerApps read + write. La identidad la despierta un WEBHOOK alcanzable por URL — con Contributor en rg-analytics podría borrar el registro, reescribir la imagen del detector o leer sus secrets. Un guardián de costos no puede tener permiso para romper lo que está salvando.&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=11;align=left;spacingLeft=10;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="1730" y="1020" width="590" height="190" as="geometry" />
         </mxCell>
-        <mxCell id="gov-note" value="⚠ Un budget de Azure NO corta el gasto: solo avisa. Por eso el 100% además dispara el runbook. Pero los datos de costo de Azure llegan con HORAS de retraso: cuando el budget ve los $40, el gasto real puede ser mayor. Esto es una red de seguridad, no un freno de mano. El freno de mano es &lt;b&gt;make detector-stop&lt;/b&gt; apenas termina la demo." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d6b656;fontSize=11;align=left;spacingLeft=10;" vertex="1" parent="1">
-          <mxGeometry x="390" y="1200" width="1730" height="70" as="geometry" />
+        <mxCell id="gov-note" value="⚠ Un budget de Azure NO corta el gasto: solo avisa. Por eso el 100% además dispara el runbook. Pero los datos de costo de Azure llegan con HORAS de retraso: cuando el budget ve los $40, el gasto real puede ser mayor. Esto es una red de seguridad, no un freno de mano. El freno de mano es &lt;b&gt;make detector-stop&lt;/b&gt; apenas termina la demo — y, si no hay más demos por hoy, &lt;b&gt;make deploy-down&lt;/b&gt;.&lt;br&gt;&lt;span style=&quot;font-size:10px&quot;&gt;El kill-switch escala el contenedor a 0 por AFUERA de Terraform, así que un &lt;i&gt;apply&lt;/i&gt; posterior lo revertiría sin decir nada. Por eso deploy-azure.sh corre un &lt;b&gt;guard&lt;/b&gt; antes de cada apply: si Azure tiene 0 réplicas y el tfvars pide &lt;i&gt;true&lt;/i&gt;, aborta. Volver a encender es una decisión de una persona: &lt;i&gt;make detector-start&lt;/i&gt;.&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d6b656;fontSize=11;align=left;spacingLeft=10;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="390" y="1225" width="1930" height="90" as="geometry" />
         </mxCell>
 
         <mxCell id="f1" style="edgeStyle=orthogonalEdgeStyle;html=1;startArrow=classic;endArrow=classic;strokeWidth=2;strokeColor=#82b366;exitX=1;exitY=0.5;entryX=0;entryY=0.3;" edge="1" parent="1" source="browser" target="vm">
@@ -162,39 +155,39 @@
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
 
-        <mxCell id="f3" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=classic;strokeWidth=2;strokeColor=#d79b00;exitX=1;exitY=0.5;entryX=0;entryY=0.4;" edge="1" parent="1" source="hub-pos" target="job">
+        <mxCell id="f3" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=classic;strokeWidth=2;strokeColor=#d79b00;exitX=1;exitY=0.5;entryX=0;entryY=0.15;" edge="1" parent="1" source="hub-pos" target="ca">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="f3-lbl" value="③ Spark consume&lt;br&gt;(cg: spark-detector)" style="text;html=1;align=center;fontSize=10;labelBackgroundColor=#ffffff;" vertex="1" parent="1">
-          <mxGeometry x="1122" y="390" width="120" height="35" as="geometry" />
+        <mxCell id="f3-lbl" value="③ Spark&lt;br&gt;consume las&lt;br&gt;posiciones" style="text;html=1;align=center;fontSize=10;labelBackgroundColor=#ffffff;" vertex="1" parent="1">
+          <mxGeometry x="1132" y="400" width="105" height="45" as="geometry" />
         </mxCell>
 
-        <mxCell id="f4" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=classic;strokeWidth=2;strokeColor=#d79b00;exitX=0;exitY=0.9;entryX=1;entryY=0.5;" edge="1" parent="1" source="job" target="hub-red">
+        <mxCell id="f4" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=classic;strokeWidth=2;strokeColor=#d79b00;exitX=0;exitY=0.85;entryX=1;entryY=0.5;" edge="1" parent="1" source="ca" target="hub-red">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="f4-lbl" value="④ publica la zona roja" style="text;html=1;align=center;fontSize=10;labelBackgroundColor=#ffffff;" vertex="1" parent="1">
-          <mxGeometry x="1130" y="628" width="130" height="20" as="geometry" />
+        <mxCell id="f4-lbl" value="④ publica&lt;br&gt;la zona roja" style="text;html=1;align=center;fontSize=10;labelBackgroundColor=#ffffff;" vertex="1" parent="1">
+          <mxGeometry x="1132" y="640" width="105" height="35" as="geometry" />
         </mxCell>
 
         <mxCell id="f5" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=classic;strokeWidth=2;strokeColor=#333333;exitX=0;exitY=0.5;entryX=1;entryY=0.85;" edge="1" parent="1" source="hub-red" target="vm">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="f5-lbl" value="⑤ la VM consume las zonas rojas (cg: metaverse-backend),&lt;br&gt;las empuja al navegador por ① y recalcula las rutas" style="text;html=1;align=center;fontSize=10;labelBackgroundColor=#ffffff;" vertex="1" parent="1">
-          <mxGeometry x="480" y="930" width="380" height="30" as="geometry" />
+        <mxCell id="f5-lbl" value="⑤ la VM consume las zonas rojas, las empuja al&lt;br&gt;navegador por ① y manda a recalcular las rutas" style="text;html=1;align=center;fontSize=10;labelBackgroundColor=#ffffff;" vertex="1" parent="1">
+          <mxGeometry x="470" y="925" width="380" height="30" as="geometry" />
         </mxCell>
 
-        <mxCell id="f6" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=classic;strokeWidth=1;strokeColor=#6c8ebf;dashed=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="job" target="adls">
+        <mxCell id="f6" style="edgeStyle=orthogonalEdgeStyle;html=1;startArrow=classic;endArrow=classic;strokeWidth=2;strokeColor=#82b366;exitX=1;exitY=0.1;entryX=0;entryY=0.5;" edge="1" parent="1" source="ca" target="ckpt">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="f6-lbl" value="⑥ archiva (opt-in)" style="text;html=1;align=center;fontSize=10;labelBackgroundColor=#ffffff;" vertex="1" parent="1">
-          <mxGeometry x="1332" y="578" width="120" height="20" as="geometry" />
+        <mxCell id="f6-lbl" value="⑥ checkpoint&lt;br&gt;(SIEMPRE)" style="text;html=1;align=center;fontSize=10;labelBackgroundColor=#ffffff;" vertex="1" parent="1">
+          <mxGeometry x="1718" y="465" width="90" height="35" as="geometry" />
         </mxCell>
 
-        <mxCell id="f7" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=classic;strokeWidth=2;strokeColor=#b85450;dashed=1;exitX=1;exitY=0.3;entryX=0;entryY=0.5;" edge="1" parent="1" source="job" target="nat">
+        <mxCell id="f7" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=classic;strokeWidth=1;strokeColor=#6c8ebf;dashed=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="ca" target="positions">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="f7-lbl" value="⑦ los workers salen a internet SOLO por acá&lt;br&gt;(túnel saliente al control plane de Databricks)" style="text;html=1;align=center;fontSize=10;labelBackgroundColor=#ffffff;" vertex="1" parent="1">
-          <mxGeometry x="1592" y="345" width="290" height="30" as="geometry" />
+        <mxCell id="f7-lbl" value="⑦ archiva&lt;br&gt;(opt-in)" style="text;html=1;align=center;fontSize=10;labelBackgroundColor=#ffffff;" vertex="1" parent="1">
+          <mxGeometry x="1718" y="570" width="90" height="35" as="geometry" />
         </mxCell>
 
         <mxCell id="f8" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=classic;strokeWidth=2;strokeColor=#d6b656;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="budget" target="ag">
@@ -210,16 +203,28 @@
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
 
-        <mxCell id="legend" value="LEYENDA&lt;br&gt;&lt;br&gt;🟩 Verde — componentes propios (nuestro código)&lt;br&gt;🟦 Azul — servicios administrados de Azure (los declara Terraform)&lt;br&gt;⬛ Negro — hubs de Kafka (los canales de eventos)&lt;br&gt;🟧 Naranja — procesamiento analítico (Spark)&lt;br&gt;🟨 Amarillo — gobernanza y costos&lt;br&gt;🟥 Rojo — lo crea DATABRICKS por su cuenta: Terraform NO lo declara ni lo borra&lt;br&gt;&lt;br&gt;— línea punteada: flujo secundario u opcional" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#666666;fontSize=11;align=left;spacingLeft=10;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+        <mxCell id="legend" value="LEYENDA&lt;br&gt;&lt;br&gt;🟩 Verde — componentes propios (nuestro código y su estado)&lt;br&gt;🟦 Azul — servicios administrados de Azure (los declara Terraform)&lt;br&gt;⬛ Negro — hubs de Kafka (los canales de eventos)&lt;br&gt;🟧 Naranja — el detector: Spark Structured Streaming, nuestro código, en un contenedor&lt;br&gt;🟨 Amarillo — gobernanza, costos y advertencias&lt;br&gt;🟥 Rojo — restricciones de la suscripción y trampas que YA nos costaron un despliegue&lt;br&gt;&lt;br&gt;— línea punteada: flujo secundario u opcional" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#666666;fontSize=11;align=left;spacingLeft=10;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
           <mxGeometry x="40" y="1400" width="640" height="230" as="geometry" />
         </mxCell>
 
-        <mxCell id="cost" value="COSTO REAL&lt;br&gt;&lt;br&gt;• Event Hubs Standard (1 TU) — ~$11/mes FIJO, empieza a cobrar con el apply&lt;br&gt;• VM E2s_v3 prendida — ~$30/mes (desasignala: ./scripts/deploy-azure.sh vm-stop)&lt;br&gt;• Databricks, cluster — ~$0.50/h SOLO con el detector ON&lt;br&gt;• Databricks, &lt;b&gt;NAT gateway — ~$0.045/h mientras el workspace exista&lt;/b&gt;, haya cluster o no&lt;br&gt;• ADLS + DBFS + disco — centavos&lt;br&gt;• Budget, kill-switch, red — gratis&lt;br&gt;&lt;br&gt;&lt;b&gt;Lo que cobra en serio es el cluster: apagalo apenas termina la demo (make detector-stop).&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11;align=left;spacingLeft=10;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
-          <mxGeometry x="700" y="1400" width="780" height="230" as="geometry" />
+        <mxCell id="cost" value="COSTO REAL — los números honestos&lt;br&gt;&lt;br&gt;• &lt;b&gt;Event Hubs Standard (1 TU) — ~$11/mes FIJO&lt;/b&gt; (~$0.015/h). Cobra desde el apply, esté o no el detector prendido.&lt;br&gt;• &lt;b&gt;VM E2s_v3 prendida — ~$0.126/h&lt;/b&gt; (desasignala: ./scripts/deploy-azure.sh vm-stop)&lt;br&gt;• &lt;b&gt;Container Registry (Basic) — ~$5/mes fijo&lt;/b&gt;&lt;br&gt;• &lt;b&gt;Detector (contenedor) — ~$0.10/h&lt;/b&gt;, SOLO con min_replicas = 1&lt;br&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;…pero Container Apps Consumption regala &lt;b&gt;180k vCPU-s + 360k GiB-s por mes&lt;/b&gt; ≈ &lt;b&gt;25 h&lt;/b&gt; a 2 vCPU / 4 GiB:&lt;br&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;el cómputo de una demo, en la práctica, sale $0.&lt;br&gt;• Log Analytics (dentro de los 5 GiB/mes gratis a este volumen), ADLS, disco, budget, kill-switch, red — centavos o gratis&lt;br&gt;&lt;br&gt;&lt;b&gt;make detector-stop NO deja el gasto en $0:&lt;/b&gt; la VM y Event Hubs siguen cobrando (~$0.15/h ≈ $3.4/día).&lt;br&gt;&lt;b&gt;Lo único que deja el gasto en $0 es make deploy-down.&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11;align=left;spacingLeft=10;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="700" y="1400" width="800" height="230" as="geometry" />
         </mxCell>
 
-        <mxCell id="quota" value="LAS 3 RESTRICCIONES DE UNA SUSCRIPCIÓN STUDENT — fallan distinto, y confundirlas cuesta horas&lt;br&gt;&lt;br&gt;1. &lt;b&gt;Regiones permitidas&lt;/b&gt; → 403 RequestDisallowedByAzure (NO es un error de cuota)&lt;br&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;southcentralus · brazilsouth · &lt;b&gt;eastus2&lt;/b&gt; · mexicocentral · canadacentral&lt;br&gt;2. &lt;b&gt;6 vCPU totales&lt;/b&gt; por región&lt;br&gt;3. &lt;b&gt;4 vCPU por FAMILIA&lt;/b&gt; de VM — y el error aparece en el recurso equivocado&lt;br&gt;&lt;br&gt;Por eso la VM y el nodo de Spark están en familias DISTINTAS a propósito:&lt;br&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;E2s_v3 (familia ESv3) = 2 vCPU&amp;nbsp;&amp;nbsp;+&amp;nbsp;&amp;nbsp;D4s_v3 (familia DSv3) = 4 vCPU&amp;nbsp;&amp;nbsp;→&amp;nbsp;&amp;nbsp;&lt;b&gt;6 / 6, justo al tope&lt;/b&gt;&lt;br&gt;En la misma familia se comerían los 4 vCPU entre sí y el cluster nunca arrancaría." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=11;align=left;spacingLeft=10;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
-          <mxGeometry x="1500" y="1400" width="880" height="230" as="geometry" />
+        <mxCell id="quota" value="LAS 3 RESTRICCIONES DE UNA SUSCRIPCIÓN STUDENT — fallan distinto, y son la EVIDENCIA de por qué el detector se bajó de las VMs&lt;br&gt;&lt;br&gt;1. &lt;b&gt;Regiones permitidas&lt;/b&gt; → 403 RequestDisallowedByAzure (NO es un error de cuota): southcentralus · brazilsouth · &lt;b&gt;eastus2&lt;/b&gt; · mexicocentral · canadacentral&lt;br&gt;2. &lt;b&gt;6 vCPU totales&lt;/b&gt; por región&amp;nbsp;&amp;nbsp;&amp;nbsp;3. &lt;b&gt;4 vCPU por FAMILIA&lt;/b&gt; de VM — y el error aparece en el recurso equivocado&lt;br&gt;&lt;br&gt;Al leer disponibilidad de SKUs: &lt;b&gt;restrictions[0].type = Zone&lt;/b&gt; → usable (solo bloquea deployments fijados a una zona). &lt;b&gt;= Location&lt;/b&gt; → genuinamente no disponible.&lt;br&gt;Filtrar por &quot;SKUs sin ninguna restricción&quot; es la trampa: esconde los perfectamente usables.&lt;br&gt;&lt;br&gt;&lt;b&gt;Acá está el porqué:&lt;/b&gt; en v1 la VM y el nodo de Spark tenían que ir en familias DISTINTAS para no comerse los vCPU entre sí (E2s_v3 + D4s_v3 = 6/6, justo al tope). Cuando Azure se quedó&lt;br&gt;sin stock de D4s_v3 no había a dónde caer: todo otro SKU de 4 vCPU está restringido por &lt;b&gt;Location&lt;/b&gt; para una suscripción Student. Hoy hay &lt;b&gt;UNA sola VM&lt;/b&gt; (2 de 6 vCPU, sin contención&lt;br&gt;por familia) y el detector no tiene SKU de VM: Container Apps Consumption es serverless." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=11;align=left;spacingLeft=10;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="1520" y="1400" width="860" height="230" as="geometry" />
+        </mxCell>
+
+        <mxCell id="why-not-dbx" value="POR QUÉ EL DETECTOR SE FUE DE DATABRICKS — y por qué SIGUE SIENDO SPARK&lt;br&gt;&lt;br&gt;El job cluster de v1 corría con &lt;b&gt;num_workers = 0&lt;/b&gt; y &lt;b&gt;spark.master = &quot;local[*, 4]&quot;&lt;/b&gt;: el detector SIEMPRE fue un único JVM en modo local de Spark. Nunca usó un cluster. Databricks era un envoltorio&lt;br&gt;caro y atado a capacidad alrededor de un solo proceso de Python.&lt;br&gt;&lt;br&gt;El 13/07/2026 el despliegue murió con &lt;b&gt;CLOUD_PROVIDER_RESOURCE_STOCKOUT&lt;/b&gt;: Azure no tenía stock de Standard_D4s_v3 en eastus2 — y es el ÚNICO SKU de 4 vCPU que una suscripción&lt;br&gt;Student puede usar ahí (todos los demás están restringidos por Location). No había SKU al que caer. &lt;b&gt;Un contenedor no tiene SKU de VM que se pueda agotar.&lt;/b&gt;&lt;br&gt;&lt;br&gt;Y con Databricks se fueron sus dos regalos: el &lt;b&gt;NAT gateway&lt;/b&gt; que cobraba ~$0.045/h mientras el workspace EXISTIERA (hubiera cluster o no), y el &lt;b&gt;rg-metaverso-databricks-managed&lt;/b&gt; que&lt;br&gt;Databricks se creaba solo, &lt;i&gt;terraform destroy&lt;/i&gt; nunca borraba, y cuyos restos bloqueaban el deploy siguiente.&lt;br&gt;&lt;br&gt;&lt;b&gt;Sigue siendo Apache Spark Structured Streaming: el requisito de la cátedra era Spark, no Databricks.&lt;/b&gt; El mismo red_point_detector.py, ahora dentro de una imagen. (v1 queda en la rama v1-databricks.)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=11;align=left;spacingLeft=10;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="40" y="1660" width="1160" height="240" as="geometry" />
+        </mxCell>
+
+        <mxCell id="retention" value="RETENCIÓN 7 DÍAS + failOnDataLoss=false&lt;br&gt;&lt;span style=&quot;font-size:10px&quot;&gt;la trampa de las demos espaciadas&lt;/span&gt;&lt;br&gt;&lt;br&gt;Event Hubs guarda &lt;b&gt;7 días&lt;/b&gt; — el máximo de Standard, y &lt;b&gt;sin costo extra&lt;/b&gt; (entra en el storage incluido del tier). El default era 1 día, y era una trampa: el checkpoint de Spark vive en ADLS y sobrevive a cualquier apagado, así que una demo tres días después de la anterior retomaría desde offsets que Event Hubs YA descartó — y Spark, por default, se NIEGA a arrancar.&lt;br&gt;&lt;br&gt;Por eso el detector setea &lt;b&gt;failOnDataLoss=false&lt;/b&gt;: salta al offset más viejo que todavía exista y sigue. Posiciones de hace días no le sirven a un detector de congestión VIVA.&lt;br&gt;&lt;br&gt;Juntas: casi nunca tiene nada que sobrevivir, y encima se puede &lt;b&gt;repetir una corrida&lt;/b&gt; para medir H1." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11;align=left;spacingLeft=10;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="1220" y="1660" width="580" height="240" as="geometry" />
+        </mxCell>
+
+        <mxCell id="image-box" value="LA IMAGEN: EL CONECTOR DE KAFKA VA HORNEADO&lt;br&gt;&lt;br&gt;red_point_detector.py declara &lt;b&gt;spark.jars.packages = org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1&lt;/b&gt;. Eso es config de SUBMIT: spark-submit lo resuelve por Ivy contra Maven Central &lt;b&gt;cada vez que arranca el JVM&lt;/b&gt;. En Databricks el conector venía con el runtime y parecía gratis.&lt;br&gt;&lt;br&gt;En un contenedor efímero eso sería una dependencia de RUNTIME con Maven Central, 30-60 s de arranque, y un detector que se muere si Maven tiene un mal día. Así que la resolución pasa en el &lt;b&gt;BUILD&lt;/b&gt;: los JARs quedan cacheados en /opt/ivy, dentro de la capa de la imagen. Ivy los encuentra offline y no le pregunta nada a nadie.&lt;br&gt;&lt;br&gt;&lt;span style=&quot;font-size:10px&quot;&gt;Verificado, no asumido: el build falla si el cache queda vacío, y si la versión del conector no coincide con la del .py.&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#666666;fontSize=11;align=left;spacingLeft=10;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="1820" y="1660" width="560" height="240" as="geometry" />
         </mxCell>
       </root>
     </mxGraphModel>
@@ -267,24 +272,24 @@
           <mxGeometry x="530" y="575" width="380" height="30" as="geometry" />
         </mxCell>
 
-        <mxCell id="ddetector" value="DETECTOR DE ZONAS ROJAS&lt;br&gt;pipeline/red_point_detector.py&lt;br&gt;PySpark — Structured Streaming local&lt;br&gt;&lt;br&gt;1. Filtra avatares detenidos (speed ≈ 0)&lt;br&gt;2. Celda de 30×30, origen (-240,-195)&lt;br&gt;3. Ventana 10 s, se recalcula cada 5 s&lt;br&gt;4. ≥ 7 quietos, permanencia ≥ 5 s → ZONA ROJA&lt;br&gt;&lt;br&gt;&lt;b&gt;Es EL MISMO archivo que corre en Databricks.&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=11;align=left;spacingLeft=8;verticalAlign=top;spacingTop=6;" vertex="1" parent="d1">
+        <mxCell id="ddetector" value="DETECTOR DE ZONAS ROJAS&lt;br&gt;pipeline/red_point_detector.py&lt;br&gt;PySpark — Structured Streaming local&lt;br&gt;&lt;br&gt;1. Filtra avatares detenidos (speed ≈ 0)&lt;br&gt;2. Celda de 30×30, origen (-240,-195)&lt;br&gt;3. Ventana 10 s, se recalcula cada 5 s&lt;br&gt;4. ≥ 7 quietos, permanencia ≥ 5 s → ZONA ROJA&lt;br&gt;&lt;br&gt;&lt;b&gt;Es EL MISMO archivo que va dentro de la imagen&lt;br&gt;del contenedor en Azure. Byte por byte.&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=11;align=left;spacingLeft=8;verticalAlign=top;spacingTop=6;" vertex="1" parent="d1">
           <mxGeometry x="1040" y="240" width="380" height="190" as="geometry" />
         </mxCell>
 
-        <mxCell id="dcheckpoint" value="checkpoints/ — la memoria del stream&lt;br&gt;&lt;span style=&quot;font-size:10px&quot;&gt;Guarda los offsets leídos y el estado de las ventanas: permite reanudar sin perder ni duplicar.&lt;br&gt;&lt;br&gt;&lt;b&gt;make clean&lt;/b&gt; al cambiar la ventana o la agregación. Un checkpoint viejo ENVENENA el stream: las&lt;br&gt;zonas rojas dejan de aparecer y no hay ni un error a la vista. (Nos pasó — está en la bitácora.)&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11;align=left;spacingLeft=8;verticalAlign=top;spacingTop=6;" vertex="1" parent="d1">
-          <mxGeometry x="1040" y="460" width="380" height="145" as="geometry" />
+        <mxCell id="dcheckpoint" value="checkpoints/ — la memoria del stream (LOCAL, en disco)&lt;br&gt;&lt;span style=&quot;font-size:10px&quot;&gt;Guarda los offsets leídos y el estado de las ventanas: permite reanudar sin perder ni duplicar.&lt;br&gt;&lt;br&gt;&lt;b&gt;make clean&lt;/b&gt; al cambiar la ventana o la agregación. Un checkpoint viejo ENVENENA el stream: las&lt;br&gt;zonas rojas dejan de aparecer y no hay ni un error a la vista. (Nos pasó — está en la bitácora.)&lt;br&gt;&lt;br&gt;&lt;b&gt;⚠ En Azure el checkpoint vive en ADLS y &lt;i&gt;make clean&lt;/i&gt; no existe:&lt;/b&gt; borrar el checkpoint de prod es&lt;br&gt;tirar los offsets de Event Hubs a la basura. Cambiar la ventana allá es una MIGRACIÓN — por eso&lt;br&gt;deploy-azure.sh compara la ventana contra la última desplegada y avisa ANTES de aplicar.&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11;align=left;spacingLeft=8;verticalAlign=top;spacingTop=6;" vertex="1" parent="d1">
+          <mxGeometry x="1040" y="450" width="380" height="185" as="geometry" />
         </mxCell>
 
-        <mxCell id="dparity" value="PARIDAD DEV ↔ PROD — la razón de ser de este diseño&lt;br&gt;&lt;br&gt;El detector es EL MISMO archivo que corre en Databricks. El servidor es EL MISMO que corre en la VM.&lt;br&gt;Cambiar de entorno NO cambia una línea de código: solo se cambia el .env.&lt;br&gt;&lt;br&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;cp env/env.dev.example .env&amp;nbsp;&amp;nbsp;→&amp;nbsp;&amp;nbsp;KAFKA_BOOTSTRAP=localhost:9092&amp;nbsp;&amp;nbsp;(PLAINTEXT, sin auth)&lt;br&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;cp env/env.prod.example .env&amp;nbsp;&amp;nbsp;→&amp;nbsp;&amp;nbsp;KAFKA_BOOTSTRAP=&amp;lt;namespace&amp;gt;.servicebus.windows.net:9093&lt;br&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;+ EVENTHUBS_CONNECTION_STRING → el mismo código pasa a SASL_SSL&lt;br&gt;&lt;br&gt;La CALIBRACIÓN también tiene una sola fuente de verdad: &lt;b&gt;env/env.prod.example&lt;/b&gt;, que lee deploy-azure.sh para&lt;br&gt;cablear el job de Databricks. Por eso el detector de Azure no puede quedar desincronizado del overlay del metaverso." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;align=left;spacingLeft=10;verticalAlign=top;spacingTop=8;" vertex="1" parent="d1">
-          <mxGeometry x="110" y="660" width="1310" height="230" as="geometry" />
+        <mxCell id="dparity" value="PARIDAD DEV ↔ PROD — la razón de ser de este diseño&lt;br&gt;&lt;br&gt;El detector es &lt;b&gt;EL MISMO ARCHIVO&lt;/b&gt; que corre dentro del contenedor en Azure: el Dockerfile lo copia byte por byte. El servidor es EL MISMO que corre en la VM.&lt;br&gt;Cambiar de entorno NO cambia una línea de código: cambian &lt;b&gt;dos variables de entorno&lt;/b&gt;.&lt;br&gt;&lt;br&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;cp env/env.dev.example .env&amp;nbsp;&amp;nbsp;→&amp;nbsp;&amp;nbsp;&lt;b&gt;KAFKA_BOOTSTRAP&lt;/b&gt;=localhost:9092&amp;nbsp;&amp;nbsp;(PLAINTEXT, sin auth)&lt;br&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;cp env/env.prod.example .env&amp;nbsp;&amp;nbsp;→&amp;nbsp;&amp;nbsp;&lt;b&gt;KAFKA_BOOTSTRAP&lt;/b&gt;=&amp;lt;namespace&amp;gt;.servicebus.windows.net:9093 + &lt;b&gt;EVENTHUBS_CONNECTION_STRING&lt;/b&gt;&lt;br&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;→ la presencia de esa segunda variable hace que el MISMO código pase a SASL_SSL&lt;br&gt;&lt;br&gt;La CALIBRACIÓN también tiene una sola fuente de verdad: &lt;b&gt;env/env.prod.example&lt;/b&gt;, que deploy-azure.sh lee para escribir infra/detector.auto.tfvars y cablear el CONTENEDOR&lt;br&gt;del detector. Por eso el detector de Azure no puede quedar desincronizado del overlay del metaverso." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;align=left;spacingLeft=10;verticalAlign=top;spacingTop=8;" vertex="1" parent="d1">
+          <mxGeometry x="110" y="680" width="1310" height="215" as="geometry" />
         </mxCell>
 
-        <mxCell id="dmake" value="INTERFAZ OPERATIVA — Makefile (make help)&lt;br&gt;&lt;br&gt;&lt;b&gt;LOCAL&lt;/b&gt;&lt;br&gt;make dev — todo el loop de una&lt;br&gt;make test — tests del detector (sin Kafka)&lt;br&gt;make metaverse-test — tests JS&lt;br&gt;make consume TOPIC=x — mirar un topic&lt;br&gt;make clean — borra los checkpoints&lt;br&gt;&lt;br&gt;&lt;b&gt;AZURE&lt;/b&gt;&lt;br&gt;make deploy — infra + app + job (pausado)&lt;br&gt;make detector-start — detector ON (cobra)&lt;br&gt;make detector-stop — detector OFF ($0/h)&lt;br&gt;make deploy-status — IP, VM, detector&lt;br&gt;make deploy-down — destruye todo" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11;align=left;spacingLeft=10;verticalAlign=top;spacingTop=8;" vertex="1" parent="d1">
-          <mxGeometry x="1460" y="240" width="340" height="365" as="geometry" />
+        <mxCell id="dmake" value="INTERFAZ OPERATIVA — Makefile (make help)&lt;br&gt;&lt;br&gt;&lt;b&gt;LOCAL&lt;/b&gt;&lt;br&gt;make dev — todo el loop de una&lt;br&gt;make test — tests del detector (sin Kafka)&lt;br&gt;make metaverse-test — tests JS&lt;br&gt;make consume TOPIC=x — mirar un topic&lt;br&gt;make clean — borra los checkpoints locales&lt;br&gt;&lt;br&gt;&lt;b&gt;AZURE&lt;/b&gt;&lt;br&gt;make deploy — infra + app + contenedor (apagado)&lt;br&gt;&lt;span style=&quot;font-size:10px&quot;&gt;&amp;nbsp;&amp;nbsp;el apply construye la imagen con az acr build&lt;/span&gt;&lt;br&gt;make detector-start — 1 réplica (arranca en segundos)&lt;br&gt;make detector-stop — 0 réplicas (el contenedor deja de cobrar)&lt;br&gt;make deploy-status — IP, VM, réplicas y salud de revisiones&lt;br&gt;make deploy-down — destruye todo (lo único que da $0)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11;align=left;spacingLeft=10;verticalAlign=top;spacingTop=8;" vertex="1" parent="d1">
+          <mxGeometry x="1460" y="240" width="340" height="395" as="geometry" />
         </mxCell>
 
         <mxCell id="dtests" value="VALIDACIÓN&lt;br&gt;&lt;br&gt;&lt;b&gt;make test&lt;/b&gt;&lt;br&gt;• tests/test_detection_logic.py&lt;br&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;la lógica de detección en batch, sin Kafka&lt;br&gt;• tests/test_position_parsing.py&lt;br&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;la costura JS → Spark (el contrato de datos)&lt;br&gt;&lt;br&gt;&lt;b&gt;make metaverse-test&lt;/b&gt;&lt;br&gt;• metaverse/tests/integration.test.js" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#666666;fontSize=11;align=left;spacingLeft=10;verticalAlign=top;spacingTop=8;" vertex="1" parent="d1">
-          <mxGeometry x="1460" y="660" width="340" height="230" as="geometry" />
+          <mxGeometry x="1460" y="680" width="340" height="215" as="geometry" />
         </mxCell>
 
         <mxCell id="de1" style="edgeStyle=orthogonalEdgeStyle;html=1;startArrow=classic;endArrow=classic;strokeWidth=2;strokeColor=#82b366;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="d1" source="dbrowser" target="dserver">

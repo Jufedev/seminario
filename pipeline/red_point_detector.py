@@ -23,11 +23,17 @@ from pyspark.sql.types import DoubleType, StringType, StructField, StructType
 def env(name: str, default: str = "") -> str:
     """Read an env var, tolerating shell-style quoting.
 
-    Databricks exports a job's environment through a bash script, so values
-    holding a space or a `;` must be quoted there (`WINDOW_DURATION="10 seconds"`,
-    and above all the Event Hubs connection string, which would otherwise
-    truncate at its first `;`). Stripping the quotes here makes the same value
-    correct whether or not the runtime already removed them.
+    Container Apps hands the environment to the process directly, so nothing
+    quotes anything and this is a no-op there. It exists because Databricks —
+    the v1 runtime — exported a job's environment through a BASH SCRIPT, where
+    a value holding a space or a `;` had to be quoted or it broke silently:
+    `WINDOW_DURATION=10 seconds` split into two words, and the Event Hubs
+    connection string truncated at its first `;`.
+
+    Kept because it costs nothing and the trap it guards against is a property
+    of shells, not of Databricks: anything that ever routes these values through
+    one again (a `.env` file, a wrapper script, a CI runner) brings it straight
+    back. Stripping the quotes here makes the same value correct either way.
     """
     return os.getenv(name, default).strip().strip("\"'")
 

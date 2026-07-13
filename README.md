@@ -35,13 +35,20 @@ metaverse/        Metaverso Three.js — fuente de datos + render (corre con bun
   server/         Servidor autoritativo + puente Kafka (avatar-positions / red-points)
   src/            Cliente del navegador (render, red, vistas) — solo modo online
 pipeline/         Big Data — el detector Spark (red_point_detector.py)
-infra/            Terraform (Azure: Event Hubs + Databricks + ADLS + VM) — entorno productivo
-  databricks/     2ª etapa: el job de Spark dentro del workspace
+  Dockerfile      La imagen con la que el MISMO detector corre en Azure
 env/              Perfiles de entorno: env.dev.example · env.prod.example
+infra/            Terraform (Azure: Event Hubs + Container Apps + ADLS + VM) — entorno productivo
 scripts/          kafka-local.sh (Kafka nativo) · dev-up.sh (loop local) · deploy-azure.sh (Azure)
-tests/            Test de la lógica de detección
+tests/            Tests de la lógica de detección y del parseo de posiciones
 docs/             Contrato de integración, bitácora de decisiones, diagramas
 ```
+
+En Azure el detector corre como **contenedor** (Azure Container Apps), no en un cluster: el
+job de Databricks de la v1 era una sola JVM en modo local (`num_workers = 0`) y nunca
+necesitó uno. Sigue siendo Apache Spark Structured Streaming, con el `.py` sin tocar. El
+porqué, desde cero, en
+[`docs/como-funciona.md` §7.1](docs/como-funciona.md#71-por-qué-el-detector-no-corre-en-un-cluster).
+La v1 queda preservada en la rama `v1-databricks`.
 
 ## Requisitos
 
@@ -71,10 +78,12 @@ make metaverse-install  # bun install del metaverso (primera vez)
 
 ```bash
 make kafka-start        # broker Kafka en localhost:9092
-make detector           # detector Spark (CELL_SIZE=75 por defecto)
+make detector           # detector Spark (celdas 30×30 ancladas en (-240,-195))
 make metaverse-server   # servidor autoritativo + puente Kafka
 make metaverse-web      # cliente del navegador (Vite vía bun)
 ```
+
+O todo el loop de una: `make dev`.
 
 Abrir el navegador, crear o entrar a una sala e iniciar la simulación. Al
 formarse una congestión, Spark publica en `red-points`, el servidor la propaga y
@@ -96,17 +105,20 @@ make docker-kafka-up    # levanta Kafka vía metaverse/docker-compose.yml
 make test
 ```
 
-Ejecuta `detect_red_points()` en modo batch con tres escenarios: 6 avatares
-detenidos en una celda (debe detectarse), 4 detenidos (bajo el umbral, no debe),
-5 en movimiento (no debe).
+Ejecuta `detect_red_points()` en modo batch con cuatro escenarios: 6 avatares
+detenidos 15 s en una celda (debe detectarse), 4 detenidos (bajo el umbral, no
+debe), 5 en movimiento (no debe) y 8 frenando ~2 s en un semáforo (permanencia
+media insuficiente, **no debe** — es la regresión que separa congestión de
+frenada normal). Corre también el test del parseo de posiciones (la costura
+JS→Spark). Ninguno de los dos necesita Kafka.
 
 ## Entorno de producción (Azure)
 
 El mismo código corre contra Azure sin cambiar una línea: Event Hubs expone el
 protocolo Kafka, así que el detector y el metaverso solo cambian de
-`KAFKA_BOOTSTRAP` + `EVENTHUBS_CONNECTION_STRING`. `infra/` provisiona la red, la
-VM que sirve el metaverso, Event Hubs, ADLS y Databricks; `infra/databricks/`
-define el job de Spark dentro del workspace.
+`KAFKA_BOOTSTRAP` + `EVENTHUBS_CONNECTION_STRING`. `infra/` provisiona —en **una
+sola etapa de Terraform**— la red, la VM que sirve el metaverso, Event Hubs, ADLS
+y el contenedor del detector (registro de imágenes + Azure Container Apps).
 
 ### Antes de desplegar (una sola vez)
 
@@ -131,32 +143,39 @@ Un solo comando hace todo lo que antes era una checklist manual:
 | Paso | Qué hace |
 |---|---|
 | Preflight | Sesión de Azure, repo público, HEAD pusheado |
+| Guard del kill-switch | Aborta si el kill-switch del presupuesto disparó (un apply lo revertiría) |
 | `infra/terraform.tfvars` | Lo genera (email del presupuesto + llave SSH — la crea si no existe) |
-| Etapa 1 · `terraform apply` | Red, VM, Event Hubs, ADLS, Databricks, alerta de presupuesto |
-| Etapa 2 · `terraform apply` | Sube `red_point_detector.py` y crea el job, **pausado** |
+| `infra/detector.auto.tfvars` | Calibración del detector, leída de `env/env.prod.example` |
+| `terraform apply` | Red, VM, Event Hubs, ADLS, registro + **imagen del detector** (`az acr build`, dentro de Azure) + Container App **apagada**, presupuesto y kill-switch |
 | `.env.azure` | Perfil listo para correr el detector/metaverso local contra Azure |
 | Espera | Hasta que cloud-init termine y la web responda (~5 min) |
 
-Al final imprime la URL del metaverso y la del job de Databricks.
+Al final imprime la URL del metaverso, el nombre del contenedor del detector, la
+imagen y la ruta del checkpoint.
 
 ### Correr la demo
 
 ```bash
-make detector-start    # detector ON — el job-cluster tarda ~5 min en arrancar
-make deploy-status     # IP, web, VM, estado del detector
-make detector-stop     # detector OFF — imprescindible al terminar
+make detector-start    # detector ON — el contenedor levanta en SEGUNDOS
+make deploy-status     # IP, web, VM, réplicas del detector y salud de sus revisiones
+make detector-stop     # detector OFF — apagalo apenas termine la demo
 ```
 
-El detector es un job **continuo** sobre un job-cluster: pausarlo cancela el run
-y **termina el cluster**, que es el único recurso que cobra por hora. Con el
-detector apagado, la demo cuesta $0/hora. La VM sí sigue consumiendo (~$30/mes);
-para apagarla también: `./scripts/deploy-azure.sh vm-stop`.
+`min_replicas` es el interruptor: 0 réplicas = no hay contenedor = el detector no
+cobra. **Pero eso NO deja el gasto en $0:** siguen cobrando la VM (~$0.126/h),
+Event Hubs (~$0.015/h), el registro (~$5/mes) y Log Analytics — ~$0.15/h en total.
+
+```bash
+./scripts/deploy-azure.sh vm-stop   # desasigna la VM (lo más caro que queda)
+make deploy-down                    # destruye TODO — lo único que deja el gasto en $0
+```
 
 **Verificación end-to-end:** abrir la web, crear una sala como admin, unir
 usuarios con el código e invocar flotas grandes. Al formarse una cola (≥7
 avatares detenidos ~5 s en una celda) la zona se pinta de roja y las rutas la
 esquivan. Si no aparecen zonas rojas, el sospechoso es el detector: `make
-deploy-status` dice si está ON, y el link al job muestra el log del driver.
+deploy-status` muestra sus réplicas y si alguna está en crash-loop, y los logs
+del contenedor traen el banner de arranque.
 
 > Sin el detector corriendo no hay zonas rojas — igual que en dev: la detección
 > vive en el Big Data.
@@ -167,8 +186,9 @@ deploy-status` dice si está ON, y el link al job muestra el log del driver.
 make deploy-down
 ```
 
-Detalle de recursos, costos por recurso e internals (por qué son dos etapas de
-Terraform, el quoting de las variables de entorno de Databricks):
+Detalle de recursos, costos por recurso e internals (por qué la imagen se
+construye con `az acr build`, dónde vive el checkpoint de Spark, los límites de
+Azure for Students, el kill-switch del presupuesto):
 [`infra/README.md`](infra/README.md).
 
 ## Documentación

@@ -153,10 +153,43 @@ congestión dura. Por eso el consumidor **deduplica por `key`** y usa TTL (§3.5
 Spark guarda su progreso (offsets de Kafka + estado de las ventanas) en un directorio de
 **checkpoint**. Es lo que le permite reiniciar sin perder ni duplicar.
 
+En dev el checkpoint es un directorio local. **En Azure vive en ADLS** (`abfss://…`), y no
+es un capricho: el contenedor del detector es efímero. Si Azure lo reinicia por su cuenta
+—un OOM, una expulsión, mantenimiento del host— un checkpoint local se iría con él y Spark
+retomaría en `latest`, es decir, **abriría un agujero de detección en silencio**. Con el
+checkpoint afuera, la réplica nueva retoma desde los offsets ya confirmados.
+
+> Detalle que parece burocrático y no lo es: la cuenta de storage tiene **namespace
+> jerárquico** (ADLS Gen2, no blob plano). Eso da **rename atómico**, que es la primitiva
+> sobre la que está construido el protocolo de commit del checkpoint de Spark. Un blob
+> plano no puede darla.
+
 > ⚠️ **La trampa que más tiempo nos costó:** si cambiás los parámetros de ventana o la
 > agregación, el checkpoint viejo es **incompatible** y el detector queda mudo — sin un
 > error obvio. En dev: `make clean` borra los checkpoints. **En prod NO** se borra
-> alegremente: ahí viven los offsets de Event Hubs.
+> alegremente: ahí viven los offsets de Event Hubs, así que un cambio de ventana pide una
+> **migración** del checkpoint, no un borrado. El script de despliegue avisa antes de
+> aplicar un cambio de ventana, justamente porque se colaría sin que nadie lo note.
+
+### 2.10 Retención: el checkpoint sobrevive, los mensajes no
+
+Estas dos cosas, juntas, arman una mina que conviene ver de antemano:
+
+- El checkpoint **persiste** entre demos (§2.9).
+- Event Hubs **borra** los mensajes después de su ventana de retención.
+
+Si la retención fuera de un día y hacés una demo tres días después de la anterior, Spark
+encontraría offsets confirmados apuntando a mensajes que **ya no existen**. Y su
+comportamiento por defecto (`failOnDataLoss = true`) es **negarse a arrancar** — justo
+cuando lo necesitás.
+
+La respuesta va por los dos lados:
+
+- **Retención de 7 días** (el máximo del tier Standard, sin costo extra): casi siempre no
+  hay nada que sobrevivir.
+- **`failOnDataLoss = false`** en el detector: si igual pasó, lo que estaría "perdiendo"
+  son posiciones de avatares de hace días. Un detector de congestión **viva** no tiene nada
+  que hacer con ellas: salta al offset más viejo que todavía exista y sigue.
 
 ---
 
@@ -326,7 +359,7 @@ cola típica ocupa 6–9 avatares por celda (de ahí el umbral de 7) y se sostie
 segundos (de ahí el dwell de 5). No son números elegidos a dedo.
 
 > **Fuente única de verdad:** `env/env.prod.example`. El script de despliegue **lee ese
-> archivo** y de ahí calibra el job de Databricks. Así el detector de Azure no puede
+> archivo** y de ahí calibra el contenedor del detector. Así el detector de Azure no puede
 > quedar desalineado del overlay del metaverso.
 
 ---
@@ -350,13 +383,70 @@ Una zona roja que no aparece es un dato falso sobre H1.
 | | Local (distrobox) | Azure |
 |---|---|---|
 | **Broker** | Kafka nativo `localhost:9092` | Event Hubs `<ns>.servicebus.windows.net:9093` (SASL_SSL) |
-| **Spark** | `make detector` (local) | Job de Databricks (el mismo `.py`) |
+| **Spark** | `make detector` (local) | **Contenedor** en Azure Container Apps (el mismo `.py`) |
 | **Metaverso** | `make metaverse-server` + Vite | VM Ubuntu: nginx sirve el cliente, systemd corre el servidor |
+| **Checkpoint** | directorio local (`./checkpoints`) | ADLS (`abfss://…`) — ver §2.9 |
 | **Qué cambia en el código** | — | **Nada.** Solo `KAFKA_BOOTSTRAP` + `EVENTHUBS_CONNECTION_STRING`. |
 
 Esa paridad no es cosmética: es lo que hace que lo que validamos en la laptop sea
 **evidencia** sobre lo que corre en la nube. Si el código de prod fuera otro, la
 validación local no probaría nada.
+
+### 7.1 Por qué el detector NO corre en un cluster
+
+Hasta el 2026-07-13 el detector de Azure corría como un job de **Databricks**. Ya no. Y el
+motivo importa más que el cambio, porque es un error conceptual que se comete todo el
+tiempo.
+
+**Empecemos por la pregunta correcta: ¿qué hace un cluster de Spark?** Reparte el trabajo
+entre varias máquinas. Sirve cuando el volumen de datos no entra en una sola: partís los
+datos, cada worker procesa su pedazo, y hay una etapa de *shuffle* que junta los
+resultados. Eso tiene un costo — coordinación, red, arranque — que se paga **solo si hay
+algo que repartir**.
+
+**¿Cuánto dato mueve nuestro pipeline?** Una muestra por avatar por segundo (§3.2). Con
+cien avatares eso son **cien mensajes JSON por segundo**. Un solo core moderno hace eso
+con la mano en el bolsillo.
+
+Y en efecto: cuando fuimos a mirar el job de Databricks que estaba corriendo, la
+configuración decía
+
+```
+num_workers  = 0
+spark.master = "local[*, 4]"
+```
+
+**Cero workers. Modo local.** El detector *siempre* fue **una sola JVM**. Nunca distribuyó
+una tarea, nunca usó un worker, nunca necesitó un cluster. Databricks era un envoltorio
+caro alrededor de **un proceso Python**.
+
+Lo descubrimos por el peor camino posible: Azure se quedó **sin stock** del tipo de máquina
+que ese cluster pedía (`CLOUD_PROVIDER_RESOURCE_STOCKOUT`) y el job simplemente **no
+arrancaba**. Buscando un plan B apareció el `num_workers = 0`, y con él la pregunta obvia:
+si es un solo proceso, **¿por qué necesita un cluster para correr?**
+
+No lo necesita. Hoy corre como un **contenedor**: el mismo `red_point_detector.py`, la misma
+JVM, la misma librería (PySpark), copiado byte a byte dentro de una imagen.
+
+**Lo que NO cambia — y esto es lo que hay que poder defender ante el jurado:** la tesis pide
+**Spark Streaming**, no Databricks. Spark en un contenedor **sigue siendo Apache Spark
+Structured Streaming**: las mismas ventanas, el mismo watermark, el mismo checkpoint, el
+mismo motor. Lo que se fue es el intermediario comercial, no la tecnología.
+
+**Lo que sí cambia, y para mejor:**
+
+| | Databricks (v1) | Contenedor (v2) |
+|---|---|---|
+| Prender / apagar | pausar el job → el cluster tarda **~5 min** en levantar | `min_replicas` 0 → 1: **segundos** |
+| Costo prendido | ~$0.60/h | ~$0.10/h (y hay una **cuota mensual gratis** que cubre ~25 h de demo) |
+| Costo apagado | un **NAT gateway** cobrando ~$0.045/h mientras el *workspace* existiera | nada |
+| Restos | un resource group que `destroy` no borraba y bloqueaba el deploy siguiente | ninguno |
+
+> **La lección general, que vale más que el ahorro:** elegir una herramienta distribuida
+> para un problema que no es distribuido no te da escala — te da **la complejidad y las
+> restricciones de la escala, sin la escala**. Ese cluster fantasma nos costó capacidad
+> (no había máquinas), plata (el NAT gateway) y tiempo (los cinco minutos de arranque),
+> y no procesaba **ni un byte más** que un contenedor de 2 vCPU.
 
 ---
 
@@ -371,10 +461,16 @@ make dev     # Kafka + detector Spark + servidor + cliente web
 **Azure:**
 
 ```bash
-make deploy          # infra + app + job del detector (pausado)
-make detector-start  # detector ON
-make detector-stop   # detector OFF — lo único que cobra por hora
+make deploy          # infra + app + contenedor del detector (apagado)
+make detector-start  # detector ON  — el contenedor levanta en segundos
+make detector-stop   # detector OFF — apagalo apenas termine la demo
+make deploy-down     # destruye TODO — lo único que deja el gasto en $0
 ```
+
+> **Ojo con "apagar":** `make detector-stop` apaga el **contenedor**, no el despliegue. La
+> VM, Event Hubs, el registro de imágenes y Log Analytics **siguen cobrando** (~$0.15/h en
+> total). El único comando que deja el gasto en cero es `make deploy-down`. Detalle por
+> recurso en [`../infra/README.md`](../infra/README.md).
 
 **Verificación de que la cadena está viva:** creás una sala, metés flotas grandes,
 generás un atasco. Al formarse la cola (≥7 detenidos ~5 s en una celda), la zona se
@@ -397,4 +493,10 @@ emitiendo o no.
   consciente: precisión vs latencia. Para una decisión de umbral, alcanza — y es
   material de tesis, no un descuido.
 - **El archivado histórico a ADLS es opcional** y está **apagado** por defecto
-  (`ARCHIVE_PATH` vacío).
+  (`ARCHIVE_PATH` vacío; en Azure se enciende con `ENABLE_ARCHIVE=true`). No es timidez:
+  el stream del archivo comparte `awaitAnyTermination()` con el de zonas rojas, así que si
+  el archivo falla en su primer batch **se lleva puesto al detector**. Encenderlo es una
+  decisión informada, no un default.
+- **El detector no escala.** Corre en **una sola** réplica, y es a propósito: la consulta
+  tiene estado (las ventanas) y una segunda réplica sería un segundo detector emitiendo los
+  mismos puntos rojos. Para el volumen del proyecto (§7.1), una alcanza y sobra.

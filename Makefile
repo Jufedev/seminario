@@ -113,7 +113,7 @@ deploy: ## Deploy EVERYTHING to Azure (infra + app VM + the detector container)
 detector-start: ## Turn the Azure detector ON (scales the container to 1 replica — bills per hour)
 	./scripts/deploy-azure.sh start
 
-detector-stop: ## Turn the Azure detector OFF (scales the container to 0 replicas — back to $0/hour)
+detector-stop: ## Turn the Azure detector OFF (0 replicas). NOT $0 for the deployment — the VM and Event Hubs keep billing; only deploy-down is $0
 	./scripts/deploy-azure.sh stop
 
 deploy-status: ## Show the Azure deployment status (web, VM, detector)

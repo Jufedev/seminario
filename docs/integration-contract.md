@@ -77,6 +77,24 @@ El detector archiva de forma **opcional** el feed histórico de `avatar-position
 (todas las posiciones parseadas) a Parquet cuando `ARCHIVE_PATH` está definido:
 directorio local en dev (`./archive`), ruta `abfss://…` de ADLS en prod. El mismo
 código sirve para ambos entornos; con `ARCHIVE_PATH` vacío no se archiva.
+Está **apagado por defecto** en los dos perfiles (en Azure se enciende con
+`ENABLE_ARCHIVE=true` en el despliegue) porque el stream del archivo comparte
+`awaitAnyTermination()` con el de zonas rojas: si el archivo falla en su primer
+batch, se lleva puesto al detector.
+
+### Retención y pérdida de datos
+
+En Azure los tres hubs tienen **retención de 7 días** (el máximo del tier Standard,
+sin costo extra) y el detector lee con **`failOnDataLoss = false`**.
+
+Las dos cosas responden al mismo problema: el checkpoint de Spark **persiste** entre
+demos (vive en ADLS, ver [Variables de entorno](#variables-de-entorno)) pero Event Hubs
+**borra** los mensajes al vencer la retención. Con una retención corta, una demo hecha
+días después de la anterior encontraría offsets confirmados apuntando a mensajes que ya
+no existen — y Spark, con su default `failOnDataLoss = true`, **se negaría a arrancar**.
+La retención larga hace que casi nunca pase; el flag hace que, si pasa, el detector salte
+al offset más viejo que exista y siga (posiciones de hace días no le sirven a un detector
+de congestión viva).
 
 ## Esquemas JSON
 
@@ -202,24 +220,47 @@ distinto.
 | Detector | `MIN_MEAN_DWELL_S` | `12` | **`5`** | Permanencia media mínima (s) por avatar; excluye frenadas de semáforo |
 | Detector | `SPEED_THRESHOLD` | `0.5` | `0.5` (no se sobreescribe) | Velocidad (m/s) bajo la cual un avatar cuenta como detenido |
 | Detector | `WATERMARK_DELAY` | `30 seconds` | `30 seconds` (no se sobreescribe) | Tolerancia a eventos tardíos antes de cerrar una ventana |
-| Detector | `ARCHIVE_PATH` | (vacío) | (vacío = archivado APAGADO) | Si se define → archiva `avatar-positions` parseado a Parquet (dir local en dev, `abfss://…` ADLS en prod) |
+| Detector | `CHECKPOINT_DIR` | `./checkpoints/red-point-detector` | **`abfss://avatar-events@<cuenta>.dfs.core.windows.net/checkpoints/red-point-detector`** | Dónde Spark guarda offsets + estado de las ventanas. En Azure lo inyecta Terraform (ver abajo) |
+| Detector | `ARCHIVE_PATH` | (vacío) | (vacío = archivado APAGADO; con `ENABLE_ARCHIVE=true` → `abfss://avatar-events@<cuenta>.dfs.core.windows.net/positions`) | Si se define → archiva `avatar-positions` parseado a Parquet (dir local en dev, ADLS en prod) |
+| Detector (solo en Azure) | `ADLS_ACCOUNT` / `ADLS_ACCOUNT_KEY` | — | inyectadas por Terraform (la clave, como *secret*) | No las lee el detector sino `pipeline/entrypoint.sh`: Hadoop pide la credencial de ADLS como *Spark conf*, no como variable de entorno |
 
 **Fuente única de verdad de la calibración: `env/env.prod.example`.** Los perfiles se
 activan con `cp env/env.dev.example .env` (el `Makefile` los carga con `-include .env`),
-y `scripts/deploy-azure.sh` **lee ese mismo archivo** para calibrar el job de Databricks
-— así el detector de Azure no puede quedar desalineado del overlay del metaverso.
+y `scripts/deploy-azure.sh` **lee ese mismo archivo** para calibrar el contenedor del
+detector (genera `infra/detector.auto.tfvars` en cada deploy) — así el detector de Azure
+no puede quedar desalineado del overlay del metaverso.
 
-> Cambiar `WINDOW_DURATION` o la agregación **invalida el checkpoint de Spark**: el
-> detector queda mudo sin error obvio. En dev, `make clean`. En prod NO se borra: ahí
-> viven los offsets de Event Hubs.
+> ⚠️ **El checkpoint de Spark es persistente, también en Azure.** Vive en ADLS
+> (`abfss://…`, sobre una cuenta con namespace jerárquico: el **rename atómico** es la
+> primitiva sobre la que está construido el commit del checkpoint, y un blob plano no la
+> tiene). Cambiar `WINDOW_DURATION`, `WINDOW_SLIDE` o la agregación **invalida el
+> checkpoint**: el detector falla al arrancar o —peor— queda mudo sin error obvio.
+>
+> En dev se arregla con `make clean`. **En prod NO se borra alegremente**: ahí viven los
+> offsets de Event Hubs, así que un cambio de ventana pide una **migración**, no un
+> borrado. `scripts/deploy-azure.sh` compara la ventana nueva contra la última desplegada
+> y **avisa antes de aplicar**.
+>
+> Escape hatch: `checkpoint_dir_override` (Terraform) lleva el checkpoint a un path local
+> del contenedor. Vuelve efímero el estado — el detector arranca seguro, pero pierde los
+> offsets en cada reinicio.
 
 ## Paridad dev ↔ prod (Azure)
 
 | Componente | Local (distrobox) | Producción (Azure) | Qué cambia |
 |---|---|---|---|
 | Broker | Kafka nativo `localhost:9092` | Event Hubs `<ns>.servicebus.windows.net:9093` SASL_SSL | `KAFKA_BOOTSTRAP` + `EVENTHUBS_CONNECTION_STRING` |
-| Detector | `make detector` (Spark local) | Job continuo de Databricks (el MISMO `.py`, subido por Terraform) | Solo variables de entorno |
+| Detector | `make detector` (Spark local) | **Contenedor en Azure Container Apps** (el MISMO `.py`, copiado byte a byte en la imagen) | Solo variables de entorno |
+| Checkpoint | directorio local (`./checkpoints/…`) | ADLS (`abfss://…`) | `CHECKPOINT_DIR` |
 | Metaverso | `make metaverse-server` + `make metaverse-web` | VM Ubuntu: nginx sirve el cliente buildeado (`:80`), systemd corre el servidor (`:8080`) | `KAFKA_BOOTSTRAP`/`EVENTHUBS_*` (inyectadas por cloud-init) |
+
+**El detector es el mismo `pipeline/red_point_detector.py` en los dos entornos.** En Azure
+corre dentro de un contenedor (`pipeline/Dockerfile`) que trae PySpark 3.5.1, el conector de
+Kafka ya resuelto y el driver de ADLS — sigue siendo **Apache Spark Structured Streaming**,
+en modo local, que es como corrió siempre (ver
+[`como-funciona.md` §7.1](como-funciona.md#71-por-qué-el-detector-no-corre-en-un-cluster)).
+El interruptor de la demo es `min_replicas` (0 = apagado, 1 = prendido) y el contenedor
+levanta en segundos.
 
 Todo el despliegue está automatizado: `make deploy` (ver [`../infra/README.md`](../infra/README.md)).
 
@@ -248,6 +289,11 @@ Todo el despliegue está automatizado: `make deploy` (ver [`../infra/README.md`]
 - ✅ **Consolidación en `sim-events`**: los 11 topics lógicos internos viajan en un
   único topic físico (Event Hubs Standard limita a 10 hubs por namespace). Total:
   3 topics físicos.
-- ✅ **Despliegue automatizado a Azure**: `make deploy` provisiona la infra, la VM con
-  la app y el job del detector en Databricks; `make detector-start` / `detector-stop`
-  son el interruptor de la demo. Ver [`../infra/README.md`](../infra/README.md).
+- ✅ **Despliegue automatizado a Azure**: `make deploy` (una sola etapa de Terraform)
+  provisiona la infra, la VM con la app y el contenedor del detector;
+  `make detector-start` / `detector-stop` son el interruptor de la demo (`min_replicas`
+  1/0). Ver [`../infra/README.md`](../infra/README.md).
+- ✅ **El detector fuera de Databricks**: corre como contenedor en Azure Container Apps con
+  el MISMO `.py`. El job de Databricks era una sola JVM en modo local (`num_workers = 0`):
+  nunca necesitó un cluster. La v1 queda preservada en la rama `v1-databricks`. Historia
+  completa en [`memory/11-container-detector.md`](memory/11-container-detector.md).
