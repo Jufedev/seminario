@@ -277,8 +277,11 @@ resource "azurerm_databricks_workspace" "main" {
   name                = "dbw-${var.project_name}"
   location            = azurerm_resource_group.bigdata.location
   resource_group_name = azurerm_resource_group.bigdata.name
-  sku                 = "standard"
-  tags                = local.tags
+  # Azure retired the Standard SKU: creating one now fails with
+  # "DatabricksStandardSkuNotSupported". Premium is the floor. The workspace itself
+  # still costs nothing; the bill is per cluster-hour (a slightly higher DBU rate).
+  sku  = "premium"
+  tags = local.tags
 }
 
 # --- Budget guard: alert early, then cut the bill --------------------------

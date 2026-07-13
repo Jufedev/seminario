@@ -15,6 +15,43 @@ repartida en cuatro resource groups (`network`, `compute`, `bigdata`, `storage`)
 
 **Nota**: Event Hubs debe ser tier **Standard** — Basic no soporta el protocolo Kafka.
 
+## Cuota: la restricción que manda (Azure for Students)
+
+Una suscripción de estudiante impone **tres límites a la vez**, y son los que definieron
+los SKUs y la región:
+
+| Límite | Valor |
+|---|---|
+| vCPUs totales por región | **6** |
+| vCPUs por **familia** de VM | **4** |
+| SKUs disponibles | La mayoría **restringidos**; en `eastus2`, prácticamente todos |
+
+De ahí sale este reparto, que **entra exacto y sin margen**:
+
+| Recurso | SKU | Familia | vCPUs |
+|---|---|---|---|
+| VM de la app | `Standard_D2s_v4` | DSv4 (límite 4) | 2 |
+| Nodo de Databricks | `Standard_D4s_v3` | DSv3 (límite 4) | 4 |
+| | | **Total** | **6 / 6** |
+
+**Las dos VMs están en familias distintas a propósito.** Si las pusieras en la misma, se
+comerían la cuota de 4 vCPUs entre ellas y el cluster de Databricks nunca arrancaría —
+con un error de cuota, no de SKU, que es aún más confuso de diagnosticar.
+
+Antes de cambiar cualquiera de las dos, verificá contra tu suscripción:
+
+```bash
+az vm list-usage -l centralus -o table    # cuotas por familia
+az vm list-skus -l centralus --resource-type virtualMachines \
+  --query "[?length(restrictions)==\`0\`].name" -o tsv    # SKUs realmente usables
+```
+
+> La región por defecto es **`centralus`**, no `eastus2`: ahí los SKUs que necesitamos
+> están todos bloqueados para suscripciones de estudiante (`SkuNotAvailable`).
+
+> Databricks debe ser SKU **premium**: Azure retiró el tier Standard
+> (`DatabricksStandardSkuNotSupported`).
+
 ## Requisitos
 
 - Terraform >= 1.5 (o OpenTofu)

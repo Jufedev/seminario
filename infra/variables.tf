@@ -5,9 +5,9 @@ variable "project_name" {
 }
 
 variable "location" {
-  description = "Azure region for all resources"
+  description = "Azure region for all resources. Not eastus2: an Azure for Students subscription has almost every VM SKU restricted there (SkuNotAvailable / NotAvailableForSubscription)."
   type        = string
-  default     = "eastus2"
+  default     = "centralus"
 }
 
 variable "budget_amount" {
@@ -43,10 +43,21 @@ variable "killswitch_webhook_expiry" {
   default     = "2027-07-01T00:00:00Z"
 }
 
+# Azure for Students imposes THREE simultaneous limits: 6 total regional vCPUs, 4 vCPUs
+# per VM family, and most SKUs flat-out restricted. So the app VM and the Databricks node
+# must sit in DIFFERENT families or they eat each other's per-family quota:
+#
+#   app VM           Standard_D2s_v4   DSv4 family   2 vCPU
+#   Databricks node  Standard_D4s_v3   DSv3 family   4 vCPU   (infra/databricks)
+#                                      total         6 / 6    <- exactly at the ceiling
+#
+# Check before changing either one:
+#   az vm list-usage -l <region> -o table
+#   az vm list-skus -l <region> --resource-type virtualMachines --query "[?length(restrictions)==\`0\`].name" -o tsv
 variable "vm_size" {
-  description = "Size of the VM hosting the metaverse frontend and backend"
+  description = "Size of the VM hosting the metaverse frontend and backend. Must be in a different VM family than the Databricks node (see comment above)."
   type        = string
-  default     = "Standard_B2s"
+  default     = "Standard_D2s_v4"
 }
 
 variable "vm_admin_username" {
