@@ -178,6 +178,17 @@ cancelara el run, Databricks lo reiniciaría solo y el cluster —y la factura�
 > **llegan con horas de retraso**: cuando el budget "vea" los $40, el gasto real puede
 > ser mayor. El freno de mano sigue siendo `make detector-stop` al terminar la demo.
 
+### Por qué el kill-switch vive en otra región
+
+Una suscripción de estudiante permite **una sola Automation Account por región**, y
+borrarla **no libera el cupo enseguida** (`"If Deleted recently, please restore the same
+account"`). Un único ciclo de `deploy-down` + `deploy` bastaría para dejarte bloqueado
+durante horas en tu región principal.
+
+Por eso la Automation Account vive en `var.killswitch_location` (`southcentralus`), no en
+`eastus2`. No cambia nada de lo que hace: **el plano de control de Azure es global**, así
+que desde ahí apaga sin problema la VM y los jobs que están en otra región.
+
 ### Probalo ANTES de necesitarlo
 
 Un kill-switch que nunca se ejecutó es una suposición, no una protección. Después del

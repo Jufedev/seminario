@@ -9,8 +9,12 @@
 # is still `make detector-stop` after each demo.
 
 resource "azurerm_automation_account" "killswitch" {
-  name                = "aa-${var.project_name}-killswitch"
-  location            = azurerm_resource_group.compute.location
+  name = "aa-${var.project_name}-killswitch"
+  # Not the compute region — see var.killswitch_location: a student subscription allows
+  # one Automation Account per region and a deleted one keeps the slot for hours, so a
+  # single destroy/apply cycle would lock the main region out. What it manages is
+  # unaffected: the Azure control plane is global.
+  location            = var.killswitch_location
   resource_group_name = azurerm_resource_group.compute.name
   sku_name            = "Basic" # 500 free job-minutes/month; this runs for seconds
   tags                = local.tags
@@ -60,7 +64,7 @@ resource "azurerm_role_assignment" "killswitch_bigdata" {
 
 resource "azurerm_automation_runbook" "killswitch" {
   name                    = "Stop-BillableCompute"
-  location                = azurerm_resource_group.compute.location
+  location                = azurerm_automation_account.killswitch.location
   resource_group_name     = azurerm_resource_group.compute.name
   automation_account_name = azurerm_automation_account.killswitch.name
   runbook_type            = "PowerShell"

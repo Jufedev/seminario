@@ -41,6 +41,20 @@ variable "budget_contact_emails" {
   type        = list(string)
 }
 
+# A student subscription allows only ONE Automation Account per region, and deleting one
+# does not free the slot immediately ("If Deleted recently, please restore the same
+# account"). A single destroy/apply cycle is therefore enough to lock you out of the
+# region for hours.
+#
+# The account does not need to live where the resources it manages live — the Azure
+# control plane is global — so it sits in a different allowed region and the main region
+# keeps its slot free. Must still be a region the subscription's policy permits.
+variable "killswitch_location" {
+  description = "Region for the kill-switch Automation Account. Deliberately different from var.location: only one Automation Account is allowed per region, and a recently deleted one keeps holding the slot."
+  type        = string
+  default     = "southcentralus"
+}
+
 variable "killswitch_webhook_expiry" {
   description = "Expiry of the webhook the budget action group calls (RFC3339). After this date the kill-switch stops firing — re-apply to renew."
   type        = string
