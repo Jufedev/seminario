@@ -32,6 +32,8 @@ PROJECT="metaverso"
 VM_USER="azureuser"
 VM_RG="rg-${PROJECT}-app"
 VM_NAME="vm-${PROJECT}-app"
+DBX_RG="rg-${PROJECT}-analytics"
+DBX_WORKSPACE="dbw-${PROJECT}-detector"
 # Databricks crea este resource group solo; Terraform NO lo conoce y no lo borra.
 DBX_MANAGED_RG="rg-${PROJECT}-databricks-managed"
 
@@ -69,8 +71,21 @@ preflight() {
 # Un `down` anterior pudo dejar el managed RG de Databricks en pie (Terraform no lo
 # borra: no es suyo). Su nombre deriva del nuestro, así que un resto BLOQUEA la creación
 # del próximo workspace — y el apply muere recién en la etapa 1, con todo lo demás ya creado.
+#
+# Pero que el RG exista NO significa que sea un resto: si el workspace está vivo, ese RG es
+# suyo y está EN USO. Borrarlo entonces no solo estaría mal — es imposible: Databricks le
+# pone una *deny assignment* del sistema que le prohíbe el borrado incluso al dueño de la
+# suscripción. El managed RG solo se va cuando se va el workspace.
+#
+# Por eso el huérfano se define como "el RG existe Y el workspace NO".
 check_no_orphan_databricks_rg() {
   az group show -n "$DBX_MANAGED_RG" >/dev/null 2>&1 || { ok "Sin restos de Databricks"; return 0; }
+
+  if databricks_workspace_exists; then
+    ok "$DBX_MANAGED_RG es del workspace actual (en uso, no se toca)"
+    return 0
+  fi
+
   warn "Quedó el resource group $DBX_MANAGED_RG de un despliegue anterior: bloquearía el workspace nuevo."
   purge_databricks_managed_rg
   say "Esperando a que Azure lo termine de borrar"
@@ -80,6 +95,11 @@ check_no_orphan_databricks_rg() {
   done
   printf '\n'
   die "Azure sigue borrando $DBX_MANAGED_RG después de 10 min. Esperá y reintentá."
+}
+
+databricks_workspace_exists() {
+  az resource show -g "$DBX_RG" -n "$DBX_WORKSPACE" \
+    --resource-type Microsoft.Databricks/workspaces >/dev/null 2>&1
 }
 
 # cloud-init clona el repo por HTTPS SIN credenciales para desplegar la app en la
@@ -363,11 +383,25 @@ cmd_down() {
 }
 
 # Idempotente: si el RG no existe, no hace nada.
+#
+# Solo se puede borrar con el workspace YA destruido: mientras vive, Databricks protege su
+# managed RG con una deny assignment del sistema que rechaza el borrado incluso al dueño de
+# la suscripción (no es un problema de permisos: no hay rol que lo habilite).
 purge_databricks_managed_rg() {
   az group show -n "$DBX_MANAGED_RG" >/dev/null 2>&1 || return 0
+
+  if databricks_workspace_exists; then
+    warn "$DBX_MANAGED_RG sigue protegido por el workspace $DBX_WORKSPACE: no se puede borrar hasta que el workspace no exista."
+    return 0
+  fi
+
   say "Limpiando el resource group que Databricks deja huérfano ($DBX_MANAGED_RG)"
-  az group delete -n "$DBX_MANAGED_RG" --yes --no-wait
-  ok "Borrado lanzado (Azure lo completa en segundo plano)"
+  if az group delete -n "$DBX_MANAGED_RG" --yes --no-wait; then
+    ok "Borrado lanzado (Azure lo completa en segundo plano)"
+  else
+    warn "No pude borrar $DBX_MANAGED_RG. Borralo a mano antes del próximo deploy o el workspace no se va a poder crear:
+       az group delete -n $DBX_MANAGED_RG --yes"
+  fi
 }
 
 usage() {
