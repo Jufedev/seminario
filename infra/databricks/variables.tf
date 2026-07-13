@@ -90,10 +90,14 @@ variable "spark_version" {
   default     = "15.4.x-scala2.12"
 }
 
-# Standard_DS3_v2 (the usual Databricks default) is NotAvailableForSubscription on Azure
-# for Students. D4s_v3 is available, and it deliberately sits in a DIFFERENT VM family
-# than the app VM (Standard_D2s_v4): the per-family quota is 4 vCPUs, so sharing a family
-# would make the cluster and the VM starve each other.
+# Standard_DS3_v2 (the usual Databricks default) is Location-restricted on Azure for
+# Students — genuinely unavailable. D4s_v3 is only Zone-restricted, so it deploys fine
+# (Azure Databricks does not pin availability zones: zone_id is an AWS concept).
+#
+# It deliberately sits in a DIFFERENT VM family than the app VM (Standard_E2s_v3, ESv3):
+# the per-family quota is 4 vCPUs, so sharing a family would make the cluster and the VM
+# starve each other — and the failure would surface here as a quota error, pointing
+# nowhere near the actual cause.
 variable "node_type_id" {
   description = "VM size of the single-node job cluster (this is the per-hour cost while the detector runs). 4 vCPUs; must be in a different VM family than var.vm_size in infra/."
   type        = string

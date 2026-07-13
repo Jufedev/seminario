@@ -4,10 +4,14 @@ variable "project_name" {
   default     = "metaverso"
 }
 
+# An Azure for Students subscription carries an "Allowed resource deployment regions"
+# policy. Anything outside that list fails with RequestDisallowedByAzure — a 403, not a
+# quota error. Read the actual list before changing this:
+#   az policy assignment list --query "[].parameters" -o json
 variable "location" {
-  description = "Azure region for all resources. Not eastus2: an Azure for Students subscription has almost every VM SKU restricted there (SkuNotAvailable / NotAvailableForSubscription)."
+  description = "Azure region. Must be one allowed by the subscription's region policy (for this one: southcentralus, brazilsouth, eastus2, mexicocentral, canadacentral)."
   type        = string
-  default     = "centralus"
+  default     = "eastus2"
 }
 
 variable "budget_amount" {
@@ -43,21 +47,30 @@ variable "killswitch_webhook_expiry" {
   default     = "2027-07-01T00:00:00Z"
 }
 
-# Azure for Students imposes THREE simultaneous limits: 6 total regional vCPUs, 4 vCPUs
-# per VM family, and most SKUs flat-out restricted. So the app VM and the Databricks node
-# must sit in DIFFERENT families or they eat each other's per-family quota:
+# Azure for Students caps vCPUs at 6 per region AND at 4 per VM family. So the app VM and
+# the Databricks node must sit in DIFFERENT families, or they eat each other's per-family
+# quota and the cluster never starts:
 #
-#   app VM           Standard_D2s_v4   DSv4 family   2 vCPU
+#   app VM           Standard_E2s_v3   ESv3 family   2 vCPU
 #   Databricks node  Standard_D4s_v3   DSv3 family   4 vCPU   (infra/databricks)
 #                                      total         6 / 6    <- exactly at the ceiling
 #
-# Check before changing either one:
-#   az vm list-usage -l <region> -o table
-#   az vm list-skus -l <region> --resource-type virtualMachines --query "[?length(restrictions)==\`0\`].name" -o tsv
+# Both are Zone-restricted for this subscription but NOT Location-restricted, which means
+# they deploy fine regionally — neither the VM nor Databricks pins an availability zone.
+# When checking a SKU, that distinction is the whole game:
+#
+#   az vm list-skus -l <region> --resource-type virtualMachines --all \
+#     --query "[?name=='<sku>'].{t:restrictions[0].type, r:restrictions[0].reasonCode}"
+#
+#   type = Zone      -> usable (only zone-pinned deployments are blocked)
+#   type = Location  -> genuinely unavailable to this subscription
+#
+# Filtering for SKUs with NO restrictions at all is the trap: it hides perfectly usable
+# ones. Family quotas: az vm list-usage -l <region> -o table
 variable "vm_size" {
   description = "Size of the VM hosting the metaverse frontend and backend. Must be in a different VM family than the Databricks node (see comment above)."
   type        = string
-  default     = "Standard_D2s_v4"
+  default     = "Standard_E2s_v3"
 }
 
 variable "vm_admin_username" {

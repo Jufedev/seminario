@@ -15,39 +15,56 @@ repartida en cuatro resource groups (`network`, `compute`, `bigdata`, `storage`)
 
 **Nota**: Event Hubs debe ser tier **Standard** — Basic no soporta el protocolo Kafka.
 
-## Cuota: la restricción que manda (Azure for Students)
+## Los límites de Azure for Students (leer antes de tocar SKUs o región)
 
-Una suscripción de estudiante impone **tres límites a la vez**, y son los que definieron
-los SKUs y la región:
+Una suscripción de estudiante impone **tres restricciones distintas a la vez**. Las tres
+fallan de forma diferente, y confundirlas cuesta horas:
 
-| Límite | Valor |
+| Restricción | Qué pasa si la violás |
 |---|---|
-| vCPUs totales por región | **6** |
-| vCPUs por **familia** de VM | **4** |
-| SKUs disponibles | La mayoría **restringidos**; en `eastus2`, prácticamente todos |
+| **Política de regiones permitidas** | `403 RequestDisallowedByAzure`. No es cuota: Azure directamente prohíbe la región. |
+| **6 vCPUs totales** por región | Error de cuota al crear la VM o el cluster. |
+| **4 vCPUs por familia** de VM | Error de cuota — y aparece en el recurso equivocado. |
+
+**Las regiones permitidas** son solo cinco (verificalas, pueden cambiar):
+
+```bash
+az policy assignment list --query "[].parameters" -o json
+# -> southcentralus, brazilsouth, eastus2, mexicocentral, canadacentral
+```
 
 De ahí sale este reparto, que **entra exacto y sin margen**:
 
 | Recurso | SKU | Familia | vCPUs |
 |---|---|---|---|
-| VM de la app | `Standard_D2s_v4` | DSv4 (límite 4) | 2 |
+| VM de la app | `Standard_E2s_v3` | ESv3 (límite 4) | 2 |
 | Nodo de Databricks | `Standard_D4s_v3` | DSv3 (límite 4) | 4 |
 | | | **Total** | **6 / 6** |
 
-**Las dos VMs están en familias distintas a propósito.** Si las pusieras en la misma, se
-comerían la cuota de 4 vCPUs entre ellas y el cluster de Databricks nunca arrancaría —
-con un error de cuota, no de SKU, que es aún más confuso de diagnosticar.
+**Están en familias distintas a propósito.** En la misma familia se comerían los 4 vCPUs
+entre ellas y el cluster nunca arrancaría — con un error de *cuota* que aparece en
+Databricks, sin nada que apunte a la VM que se comió el presupuesto.
 
-Antes de cambiar cualquiera de las dos, verificá contra tu suscripción:
+### `Zone` vs `Location`: la distinción que lo decide todo
+
+Al mirar si un SKU sirve, **no alcanza con ver si tiene restricciones**: hay que ver de
+qué **tipo** son.
 
 ```bash
-az vm list-usage -l centralus -o table    # cuotas por familia
-az vm list-skus -l centralus --resource-type virtualMachines \
-  --query "[?length(restrictions)==\`0\`].name" -o tsv    # SKUs realmente usables
+az vm list-skus -l eastus2 --resource-type virtualMachines --all \
+  --query "[?name=='Standard_D4s_v3'].{tipo:restrictions[0].type, motivo:restrictions[0].reasonCode}" -o table
 ```
 
-> La región por defecto es **`centralus`**, no `eastus2`: ahí los SKUs que necesitamos
-> están todos bloqueados para suscripciones de estudiante (`SkuNotAvailable`).
+- **`type = Zone`** → **usable**. Solo está bloqueado para despliegues fijados a una zona
+  de disponibilidad. Ni la VM ni Databricks fijan zona (`zone_id` es un concepto de AWS),
+  así que despliegan sin problema.
+- **`type = Location`** → **genuinamente no disponible** para tu suscripción.
+
+> Filtrar por "SKUs sin ninguna restricción" es la trampa: esconde SKUs perfectamente
+> usables. `Standard_D4s_v3` y `Standard_E2s_v3` tienen las tres zonas restringidas y aun
+> así funcionan.
+
+Cuotas por familia: `az vm list-usage -l eastus2 -o table`.
 
 > Databricks debe ser SKU **premium**: Azure retiró el tier Standard
 > (`DatabricksStandardSkuNotSupported`).
