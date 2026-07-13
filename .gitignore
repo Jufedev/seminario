@@ -19,3 +19,6 @@ infra/databricks/terraform.tfvars
 
 # Prod profile rendered from the Terraform outputs (holds the Event Hubs key)
 .env.azure
+
+# Local AI tooling artifact (skill index with absolute host paths) — not project code
+.atl/
