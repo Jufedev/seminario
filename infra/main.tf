@@ -236,18 +236,25 @@ resource "azurerm_eventhub_namespace" "main" {
   tags                = merge(local.tags, { proposito = "El 'Kafka' del pipeline: transporta avatar-positions, red-points y sim-events" })
 }
 
+# Retention is 7 days — the Standard tier's maximum, and it costs nothing extra
+# (it is covered by the tier's included storage). One day was the default and it
+# was a trap: the detector's checkpoint lives on ADLS and outlives any stop, so a
+# demo run three days after the last one would resume from offsets Event Hubs had
+# already dropped. The detector also sets failOnDataLoss=false, so it now survives
+# that on its own — but keeping a week of history means it usually has nothing to
+# survive, and it makes replaying a run for the H1 measurement possible at all.
 resource "azurerm_eventhub" "avatar_positions" {
   name              = "avatar-positions"
   namespace_id      = azurerm_eventhub_namespace.main.id
   partition_count   = 4
-  message_retention = 1
+  message_retention = 7
 }
 
 resource "azurerm_eventhub" "red_points" {
   name              = "red-points"
   namespace_id      = azurerm_eventhub_namespace.main.id
   partition_count   = 1
-  message_retention = 1
+  message_retention = 7
 }
 
 # All internal simulation topics travel consolidated in one hub (the logical
@@ -257,22 +264,26 @@ resource "azurerm_eventhub" "sim_events" {
   name              = "sim-events"
   namespace_id      = azurerm_eventhub_namespace.main.id
   partition_count   = 1
-  message_retention = 1
+  message_retention = 7
 }
 
-resource "azurerm_eventhub_consumer_group" "spark_detector" {
-  name                = "spark-detector"
-  namespace_name      = azurerm_eventhub_namespace.main.name
-  eventhub_name       = azurerm_eventhub.avatar_positions.name
-  resource_group_name = azurerm_resource_group.streaming.name
-}
-
-resource "azurerm_eventhub_consumer_group" "metaverse_backend" {
-  name                = "metaverse-backend"
-  namespace_name      = azurerm_eventhub_namespace.main.name
-  eventhub_name       = azurerm_eventhub.red_points.name
-  resource_group_name = azurerm_resource_group.streaming.name
-}
+# NO consumer groups are declared, and that is deliberate.
+#
+# There used to be two — `spark-detector` on avatar-positions and `metaverse-backend`
+# on red-points — and NOTHING ever used them:
+#
+#   * Spark's Kafka source does not take a group id from us. It generates its own
+#     (`spark-kafka-source-<uuid>`) and tracks offsets in ITS checkpoint, not in the
+#     broker. That is the whole design: the checkpoint is the source of truth, which
+#     is what makes the restart semantics exactly-once.
+#   * RedPointStore uses a per-process ephemeral group id on purpose
+#     (`ecci-redpoints-<pid>-<ts>`), so that a server restart cannot resurrect stale
+#     red zones from a committed offset. Red zones are LIVE state with a TTL.
+#   * The analytics consumer uses `ecci-analytics`.
+#
+# So the two declared groups were decoration that the architecture diagram then
+# repeated as fact ("Spark consume (cg: spark-detector)"). Deleting them makes the
+# code and the diagram tell the same story, which is the only version worth defending.
 
 # Single namespace-level connection string for producer, Spark and consumer.
 # Enough for an academic project; production would use per-app rules.

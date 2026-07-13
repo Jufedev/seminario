@@ -101,6 +101,17 @@ def kafka_options(topic: str, for_sink: bool = False) -> dict:
     else:
         options["subscribe"] = topic
         options["startingOffsets"] = "latest"
+        # Only relevant when a checkpoint survives longer than the broker's retention,
+        # which in Azure is the normal case rather than an edge one: the detector is
+        # stopped between demos, its checkpoint lives on ADLS, and Event Hubs drops
+        # messages after its retention window. On the next start Spark would find its
+        # committed offsets pointing at messages that no longer exist and — with the
+        # default of true — refuse to start at all, right when it is needed.
+        #
+        # The data it would be "losing" is avatar positions from days ago. A detector
+        # of live congestion has no use for them. Skip to the oldest offset that still
+        # exists and carry on.
+        options["failOnDataLoss"] = "false"
     if EVENTHUBS_CONNECTION_STRING:
         options.update(
             {
