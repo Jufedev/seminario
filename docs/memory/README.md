@@ -20,6 +20,15 @@ big-data pipeline (Kafka + Spark). Grade project, Universidad ECCI (Bogotá).
 | [06-status-and-plan.md](06-status-and-plan.md) | Day-1 status review, closing plan, session summary |
 | [07-git-and-remote.md](07-git-and-remote.md) | Repository init and PDF history purge |
 | [08-v2-integration.md](08-v2-integration.md) | v2 metaverse integration, restructure, review fixes, first tests |
+| [09-detection-tuning.md](09-detection-tuning.md) | The poisoned-checkpoint outage, the live-queue calibration, metricsOnly |
+| [10-azure-deployment.md](10-azure-deployment.md) | `sim-events` consolidation, one-command deploy, the Databricks bash-quoting trap |
 
 Each entry keeps its original date and type (decision / architecture / discovery /
 bugfix / pattern) so the reasoning behind each choice stays traceable.
+
+> **This is a log, not a description of the present.** Entries are historical: they
+> record what was decided *on that date* and are never rewritten. Some early entries
+> describe an architecture that no longer exists (the v1 Python bridge, a 6×6 zone grid)
+> — that is the point of a log. For **what is true today**, read
+> [`../como-funciona.md`](../como-funciona.md) (concepts and how it works) and
+> [`../integration-contract.md`](../integration-contract.md) (the formal contract).

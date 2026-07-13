@@ -11,7 +11,7 @@
     "test": "bun test",
     "kafka:up": "docker compose up -d",
     "kafka:down": "docker compose down",
-    "kafka:tail": "docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic route.decision --from-beginning"
+    "kafka:tail": "docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic sim-events --from-beginning"
   },
   "dependencies": {
     "kafkajs": "^2.2.4",

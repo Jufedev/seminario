@@ -173,6 +173,15 @@ Terraform, el quoting de las variables de entorno de Databricks):
 
 ## Documentación
 
-- [`docs/integration-contract.md`](docs/integration-contract.md) — topics, esquemas, coordenadas, env
-- [`docs/memory/`](docs/memory/) — bitácora de decisiones técnicas (con fechas y tipo)
+**Si sos nuevo en el proyecto, empezá acá:**
+
+- [`docs/como-funciona.md`](docs/como-funciona.md) — **cómo funciona y por qué**. Los
+  conceptos (streaming, Kafka, ventanas, watermark, checkpoint) explicados desde cero, y
+  el recorrido de un dato de punta a punta. No hace falta saber Big Data para leerlo.
+
+Referencia:
+
+- [`docs/integration-contract.md`](docs/integration-contract.md) — el contrato formal: topics, esquemas JSON, coordenadas, variables de entorno
+- [`infra/README.md`](infra/README.md) — despliegue a Azure, costos por recurso, ciclo de la demo
+- [`docs/memory/`](docs/memory/) — bitácora de decisiones técnicas (histórica, con fechas y tipo)
 - `documentacion-ia-azure.md` — registro de prompts/outputs de IA (formato ECCI)

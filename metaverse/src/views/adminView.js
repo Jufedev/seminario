@@ -209,8 +209,9 @@ export function renderAdminView(app) {
     view.querySelector('#d-arrived').textContent = m.global.arrived
     view.querySelector('#d-speed').textContent = m.global.avgSpeed ?? '—'
     view.querySelector('#d-c').textContent = m.global.avgC ?? '—'
-    // Zonas rojas del detector Spark (índices de celda activos), NO el contador
-    // muerto del ZoneSystem interno (m.global.redZones, siempre 0 con la detección off).
+    // Zonas rojas del detector Spark (índices de celda activos). El overlay de los
+    // jugadores se pinta de esta misma fuente, así que el KPI nunca puede
+    // contradecir lo que se ve en pantalla.
     const sparkRed = m.sparkRedZones ?? []
     view.querySelector('#d-red').textContent = sparkRed.length
     view.querySelector('#d-inc').textContent = m.global.incidentsActive

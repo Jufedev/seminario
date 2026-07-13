@@ -6,6 +6,11 @@ Este documento define el contrato formal entre el metaverso Three.js
 JSON, mapeo de coordenadas, cadencia de emisión y variables de entorno. El mismo
 código corre en local y en Azure: solo cambian variables de entorno.
 
+> ¿Buscás **entender** el sistema en vez de consultar un campo exacto? Empezá por
+> [`como-funciona.md`](como-funciona.md): explica los conceptos (streaming, Kafka,
+> ventanas, watermark) y el porqué de cada decisión. Este documento es la referencia
+> normativa; ese otro es la explicación.
+
 ## Principio rector
 
 El **Big Data es el detector de récord**. El metaverso es la FUENTE de datos
@@ -37,10 +42,13 @@ aristas y recalculando rutas de los avatares en camino.
 
 ## Ruta rápida (loop completo en local, dentro del distrobox)
 
+Un solo comando levanta el loop completo: **`make dev`** (Kafka → detector → servidor
+→ cliente; Ctrl-C baja todo). Equivale a, en cuatro terminales:
+
 1. `make kafka-start` — broker Kafka en `localhost:9092`
-2. `make detector` — detector Spark, celdas de 30×30 ancladas en `(-240,-195)` (terminal 1)
-3. `make metaverse-server` — servidor autoritativo + puente Kafka (terminal 2)
-4. `make metaverse-web` — cliente del navegador (Vite vía bun) (terminal 3)
+2. `make detector` — detector Spark, celdas de 30×30 ancladas en `(-240,-195)`
+3. `make metaverse-server` — servidor autoritativo (produce y consume Kafka)
+4. `make metaverse-web` — cliente del navegador (Vite vía bun)
 5. Abrir el navegador, crear/entrar a una sala e iniciar la simulación
 6. Verificación: al formarse una congestión, Spark publica en `red-points`, el
    servidor la propaga y la zona se pinta de rojo en el navegador con recálculo
@@ -78,6 +86,7 @@ Producido por el servidor (`metaverse/server/simulation.js`, muestreo por avatar
 
 ```json
 {
+  "room": "ECCI-1234",
   "avatar_id": "ECCI-1234-3f-42",
   "x": -104.50,
   "y": 152.00,
@@ -100,9 +109,13 @@ Producido por el servidor (`metaverse/server/simulation.js`, muestreo por avatar
 > y trasladado aquí. El servidor guarda `_lastEmitX/Z/_time` por agente y calcula
 > el desplazamiento real; la primera muestra cae a `speed[i]·4`.
 
-El envelope del puente Kafka agrega `room` y un `ts` epoch, pero el payload se
-expande al final, así que el `ts` ISO gana; el campo `room` extra lo ignora el
-esquema del detector.
+El envelope del productor agrega `room` y un `ts` epoch, pero el payload se expande
+al final, así que **el `ts` ISO gana** (deliberado: el detector necesita event-time
+ISO-8601, no epoch). `room` sí lo usa el detector: agrupa por sala.
+
+> No hay proceso puente. El servidor Node produce a Kafka de forma nativa (kafkajs);
+> `KafkaBridge` es una CLASE en proceso, no un servicio aparte. El bridge Python de la
+> v1 fue eliminado del repo.
 
 ### 2. Salida del detector: `red-points`
 
@@ -122,13 +135,16 @@ lleva la sala en la que se detectó (null en mensajes legacy sin envelope). La
 }
 ```
 
-Semántica de detección: una celda es punto rojo cuando en la ventana deslizante
-de 30 s hay ≥ `MIN_STATIONARY_AVATARS` avatares distintos con `speed < 0.5` **y**
-la permanencia media (`mean_dwell_s` = muestras detenidas por avatar ≈ segundos
-a 1 Hz) alcanza `MIN_MEAN_DWELL_S` (default 12 s). El requisito de permanencia
-distingue congestión real de frenadas de semáforo (fases de 8 s): sin él, el
-conteo de avatares distintos — monotónico dentro de la ventana — convertía
-cualquier semáforo con flujo normal en zona roja permanente.
+Semántica de detección: una celda es punto rojo cuando, dentro de la ventana
+deslizante, hay ≥ `MIN_STATIONARY_AVATARS` avatares distintos con
+`speed < SPEED_THRESHOLD` **y** la permanencia media (`mean_dwell_s` = muestras
+detenidas por avatar ≈ segundos, a 1 Hz) alcanza `MIN_MEAN_DWELL_S`.
+
+El requisito de permanencia distingue congestión real de frenadas de semáforo: sin
+él, el conteo de avatares distintos — monotónico dentro de la ventana — convertía
+cualquier semáforo con flujo normal en zona roja permanente. Los valores concretos
+de la ventana y los umbrales NO son los del código: ver
+[Variables de entorno](#variables-de-entorno).
 
 El servidor (`metaverse/analytics/redPoints.js`) usa solo `center_x`/`center_y`:
 `zoneIndexAt(center_x, center_y)` → índice de zona 16×13 (0..207) para el overlay.
@@ -155,10 +171,11 @@ re-emisiones de Spark (modo `update`).
 
 El detector agrupa por `(room, celda)`: cada sala se detecta de forma
 independiente, así que salas simultáneas no mezclan su congestión. El campo
-`room` del envelope del puente Kafka viaja en el esquema y se emite en cada
-`red-point`; mensajes legacy sin `room` (null) forman un único grupo y siguen
-funcionando. La `key` de Kafka incluye la sala (`room_cell_x_cell_y`) para que
-los puntos rojos por sala se particionen distinto.
+`room` del envelope del productor viaja en el esquema y se emite en cada
+`red-point`; mensajes sin `room` (null) forman un único grupo y el servidor los
+trata como **globales** (visibles para todas las salas). La `key` de Kafka incluye
+la sala (`room_cell_x_cell_y`) para que los puntos rojos por sala se particionen
+distinto.
 
 ## Regla de cadencia
 
@@ -170,32 +187,47 @@ los puntos rojos por sala se particionen distinto.
 
 ## Variables de entorno
 
-| Componente | Variable | Default | Significado |
-|---|---|---|---|
-| Detector y metaverso | `KAFKA_BOOTSTRAP` | `localhost:9092` | Broker Kafka (o `<ns>.servicebus.windows.net:9093` en Azure) |
-| Detector y metaverso | `EVENTHUBS_CONNECTION_STRING` | (vacío) | Si se define → SASL_SSL / `$ConnectionString` contra Event Hubs |
-| Detector | `CELL_SIZE_X` / `CELL_SIZE_Y` | `30` / `30` (`make detector`) | Tamaño de celda del grid (espejo del overlay 16×13) |
-| Detector | `SPEED_THRESHOLD` | `0.5` | Velocidad (m/s) bajo la cual un avatar cuenta como detenido |
-| Detector | `MIN_STATIONARY_AVATARS` | `5` | Avatares detenidos para declarar punto rojo |
-| Detector | `MIN_MEAN_DWELL_S` | `12` | Permanencia media mínima (s) por avatar en la ventana; debe superar la fase de semáforo (8 s) para excluir frenadas normales |
-| Detector | `WINDOW_DURATION` / `WINDOW_SLIDE` | `30s` / `10s` | Ventana deslizante (variable experimental de H1) |
-| Detector | `ARCHIVE_PATH` | (vacío) | Si se define → archiva `avatar-positions` parseado a Parquet (dir local en dev, `abfss://…` ADLS en prod); vacío = desactivado |
+> ⚠️ **El detector NUNCA corre con los defaults del código.** Los perfiles de entorno
+> los sobreescriben con la calibración validada. Si sacás conclusiones leyendo los
+> defaults de `red_point_detector.py`, estás mirando valores que nadie usa.
 
-Los perfiles listos están en `env/env.dev.example` y `env/env.prod.example`
-(`cp env/env.dev.example .env`); el `Makefile` los carga con `-include .env`.
+| Componente | Variable | Default en código | **Perfil calibrado (lo que corre)** | Significado |
+|---|---|---|---|---|
+| Detector y metaverso | `KAFKA_BOOTSTRAP` | `localhost:9092` | igual en dev; `<ns>…:9093` en Azure | Broker Kafka |
+| Detector y metaverso | `EVENTHUBS_CONNECTION_STRING` | (vacío) | solo en Azure | Si se define → SASL_SSL / `$ConnectionString` contra Event Hubs |
+| Detector | `CELL_SIZE_X` / `CELL_SIZE_Y` | `100` / `100` | **`30` / `30`** | Tamaño de celda (espejo exacto del overlay 16×13) |
+| Detector | `GRID_ORIGIN_X` / `GRID_ORIGIN_Y` | `0` / `0` | **`-240` / `-195`** | Ancla de la grilla, a media manzana (ver §Mapeo) |
+| Detector | `WINDOW_DURATION` / `WINDOW_SLIDE` | `30 seconds` / `10 seconds` | **`10 seconds` / `5 seconds`** | Ventana deslizante — **la variable experimental de H1** |
+| Detector | `MIN_STATIONARY_AVATARS` | `5` | **`7`** | Avatares distintos detenidos para declarar punto rojo (una cola típica ocupa 6-9 por celda) |
+| Detector | `MIN_MEAN_DWELL_S` | `12` | **`5`** | Permanencia media mínima (s) por avatar; excluye frenadas de semáforo |
+| Detector | `SPEED_THRESHOLD` | `0.5` | `0.5` (no se sobreescribe) | Velocidad (m/s) bajo la cual un avatar cuenta como detenido |
+| Detector | `WATERMARK_DELAY` | `30 seconds` | `30 seconds` (no se sobreescribe) | Tolerancia a eventos tardíos antes de cerrar una ventana |
+| Detector | `ARCHIVE_PATH` | (vacío) | (vacío = archivado APAGADO) | Si se define → archiva `avatar-positions` parseado a Parquet (dir local en dev, `abfss://…` ADLS en prod) |
+
+**Fuente única de verdad de la calibración: `env/env.prod.example`.** Los perfiles se
+activan con `cp env/env.dev.example .env` (el `Makefile` los carga con `-include .env`),
+y `scripts/deploy-azure.sh` **lee ese mismo archivo** para calibrar el job de Databricks
+— así el detector de Azure no puede quedar desalineado del overlay del metaverso.
+
+> Cambiar `WINDOW_DURATION` o la agregación **invalida el checkpoint de Spark**: el
+> detector queda mudo sin error obvio. En dev, `make clean`. En prod NO se borra: ahí
+> viven los offsets de Event Hubs.
 
 ## Paridad dev ↔ prod (Azure)
 
 | Componente | Local (distrobox) | Producción (Azure) | Qué cambia |
 |---|---|---|---|
 | Broker | Kafka nativo `localhost:9092` | Event Hubs `<ns>.servicebus.windows.net:9093` SASL_SSL | `KAFKA_BOOTSTRAP` + `EVENTHUBS_CONNECTION_STRING` |
-| Detector | `make detector` (Spark local) | Databricks (mismo job) | Solo variables de entorno |
-| Metaverso | `make metaverse-server` + `make metaverse-web` | Hosting del cliente + servidor en Container Apps | `KAFKA_BOOTSTRAP`/`EVENTHUBS_*` (servidor) |
+| Detector | `make detector` (Spark local) | Job continuo de Databricks (el MISMO `.py`, subido por Terraform) | Solo variables de entorno |
+| Metaverso | `make metaverse-server` + `make metaverse-web` | VM Ubuntu: nginx sirve el cliente buildeado (`:80`), systemd corre el servidor (`:8080`) | `KAFKA_BOOTSTRAP`/`EVENTHUBS_*` (inyectadas por cloud-init) |
+
+Todo el despliegue está automatizado: `make deploy` (ver [`../infra/README.md`](../infra/README.md)).
 
 ## Checklist de verificación
 
-- [ ] `make test` pasa (lógica de detección pura, sin Kafka)
-- [ ] `make metaverse-server` conecta al broker y pre-crea `avatar-positions` / `red-points`
+- [ ] `make test` pasa (lógica de detección pura, sin Kafka) y `make metaverse-test` pasa (seams JS)
+- [ ] `make metaverse-server` conecta al broker y pre-crea los 3 topics físicos
+      (`sim-events`, `avatar-positions`, `red-points`); el log debe decir `kafka:kafka`, no `kafka:local`
 - [ ] `make consume TOPIC=avatar-positions` muestra el esquema del pipeline (un mensaje por avatar)
 - [ ] Con una congestión formada, `make consume TOPIC=red-points` muestra el punto rojo y la zona se pinta en el navegador con recálculo de rutas
 
@@ -211,3 +243,11 @@ Los perfiles listos están en `env/env.dev.example` y `env/env.prod.example`
   lleva `room` (salas simultáneas ya no mezclan congestión).
 - ✅ **Archivado a ADLS**: escritura opcional del feed histórico de
   `avatar-positions` a Parquet vía `ARCHIVE_PATH` (dir local en dev, ADLS en prod).
+  **Apagado por defecto** en ambos perfiles; en Azure se enciende con
+  `ENABLE_ARCHIVE=true` en el despliegue.
+- ✅ **Consolidación en `sim-events`**: los 11 topics lógicos internos viajan en un
+  único topic físico (Event Hubs Standard limita a 10 hubs por namespace). Total:
+  3 topics físicos.
+- ✅ **Despliegue automatizado a Azure**: `make deploy` provisiona la infra, la VM con
+  la app y el job del detector en Databricks; `make detector-start` / `detector-stop`
+  son el interruptor de la demo. Ver [`../infra/README.md`](../infra/README.md).

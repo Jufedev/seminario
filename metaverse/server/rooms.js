@@ -1,9 +1,9 @@
 // ════════════════════════════════════════════════════════════════
-//  SALAS (M2) — cada sala tiene un código único "ECCI-XXXX", máximo
+//  SALAS — cada sala tiene un código único "ECCI-XXXX", máximo
 //  1 admin + 3 usuarios, y SU PROPIA simulación autoritativa.
-//  Nota para M3: el grafo (mapData.js) es un módulo compartido entre
-//  salas; hoy nadie lo muta (sin incidentes en el server), pero cuando
-//  cada sala tenga incidentes propios necesitará su copia del grafo.
+//  El grafo (mapData.js) es un módulo compartido, pero cada sala lleva
+//  su propio graphState con las penalizaciones de sus incidentes y de
+//  sus zonas rojas, así que dos salas no se contaminan las rutas.
 // ════════════════════════════════════════════════════════════════
 import { Simulation } from './simulation.js'
 
