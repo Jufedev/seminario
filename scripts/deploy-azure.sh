@@ -3,7 +3,8 @@
 #
 #   ./scripts/deploy-azure.sh up      # infra + app en la VM + contenedor del detector
 #   ./scripts/deploy-azure.sh start   # detector ON  (1 réplica: arranca en segundos)
-#   ./scripts/deploy-azure.sh stop    # detector OFF (0 réplicas -> $0/h)
+#   ./scripts/deploy-azure.sh stop    # detector OFF (0 réplicas -> $0/h EL DETECTOR;
+#                                     #   la VM y Event Hubs siguen cobrando. $0 es `down`)
 #   ./scripts/deploy-azure.sh status  # IP, web, estado del detector, VM
 #   ./scripts/deploy-azure.sh down    # destruye TODO
 #
