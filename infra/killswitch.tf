@@ -9,6 +9,8 @@
 # is still `make detector-stop` after each demo.
 
 resource "azurerm_automation_account" "killswitch" {
+  count = var.enable_killswitch ? 1 : 0
+
   name = "aa-${var.project_name}-killswitch"
   # See var.killswitch_location: a Student subscription restricts Automation Accounts to
   # its own region list, and the only region that list shares with the subscription's
@@ -30,23 +32,29 @@ resource "azurerm_automation_account" "killswitch" {
 # Account (governance), but their VALUE points at the VM's group (app) — that is the
 # target the runbook has to deallocate.
 resource "azurerm_automation_variable_string" "vm_resource_group" {
+  count = var.enable_killswitch ? 1 : 0
+
   name                    = "VmResourceGroup"
   resource_group_name     = azurerm_resource_group.governance.name
-  automation_account_name = azurerm_automation_account.killswitch.name
+  automation_account_name = azurerm_automation_account.killswitch[0].name
   value                   = azurerm_resource_group.app.name
 }
 
 resource "azurerm_automation_variable_string" "vm_name" {
+  count = var.enable_killswitch ? 1 : 0
+
   name                    = "VmName"
   resource_group_name     = azurerm_resource_group.governance.name
-  automation_account_name = azurerm_automation_account.killswitch.name
+  automation_account_name = azurerm_automation_account.killswitch[0].name
   value                   = azurerm_linux_virtual_machine.app.name
 }
 
 resource "azurerm_automation_variable_string" "databricks_url" {
+  count = var.enable_killswitch ? 1 : 0
+
   name                    = "DatabricksUrl"
   resource_group_name     = azurerm_resource_group.governance.name
-  automation_account_name = azurerm_automation_account.killswitch.name
+  automation_account_name = azurerm_automation_account.killswitch[0].name
   value                   = "https://${azurerm_databricks_workspace.detector.workspace_url}"
 }
 
@@ -54,22 +62,28 @@ resource "azurerm_automation_variable_string" "databricks_url" {
 # Contributor on the Databricks workspace's RG also makes the identity a workspace admin
 # in Azure Databricks, which is what lets the runbook call the Jobs API.
 resource "azurerm_role_assignment" "killswitch_app" {
+  count = var.enable_killswitch ? 1 : 0
+
   scope                = azurerm_resource_group.app.id
   role_definition_name = "Contributor"
-  principal_id         = azurerm_automation_account.killswitch.identity[0].principal_id
+  principal_id         = azurerm_automation_account.killswitch[0].identity[0].principal_id
 }
 
 resource "azurerm_role_assignment" "killswitch_analytics" {
+  count = var.enable_killswitch ? 1 : 0
+
   scope                = azurerm_resource_group.analytics.id
   role_definition_name = "Contributor"
-  principal_id         = azurerm_automation_account.killswitch.identity[0].principal_id
+  principal_id         = azurerm_automation_account.killswitch[0].identity[0].principal_id
 }
 
 resource "azurerm_automation_runbook" "killswitch" {
+  count = var.enable_killswitch ? 1 : 0
+
   name                    = "Stop-BillableCompute"
-  location                = azurerm_automation_account.killswitch.location
+  location                = azurerm_automation_account.killswitch[0].location
   resource_group_name     = azurerm_resource_group.governance.name
-  automation_account_name = azurerm_automation_account.killswitch.name
+  automation_account_name = azurerm_automation_account.killswitch[0].name
   runbook_type            = "PowerShell"
   log_progress            = true
   log_verbose             = true
@@ -79,15 +93,19 @@ resource "azurerm_automation_runbook" "killswitch" {
 }
 
 resource "azurerm_automation_webhook" "killswitch" {
+  count = var.enable_killswitch ? 1 : 0
+
   name                    = "wh-killswitch"
   resource_group_name     = azurerm_resource_group.governance.name
-  automation_account_name = azurerm_automation_account.killswitch.name
+  automation_account_name = azurerm_automation_account.killswitch[0].name
   expiry_time             = var.killswitch_webhook_expiry
   enabled                 = true
-  runbook_name            = azurerm_automation_runbook.killswitch.name
+  runbook_name            = azurerm_automation_runbook.killswitch[0].name
 }
 
 resource "azurerm_monitor_action_group" "budget" {
+  count = var.enable_killswitch ? 1 : 0
+
   name                = "ag-${var.project_name}-budget"
   resource_group_name = azurerm_resource_group.governance.name
   short_name          = "budgetkill"
@@ -103,10 +121,10 @@ resource "azurerm_monitor_action_group" "budget" {
 
   automation_runbook_receiver {
     name                    = "stop-billable-compute"
-    automation_account_id   = azurerm_automation_account.killswitch.id
-    runbook_name            = azurerm_automation_runbook.killswitch.name
-    webhook_resource_id     = azurerm_automation_webhook.killswitch.id
-    service_uri             = azurerm_automation_webhook.killswitch.uri
+    automation_account_id   = azurerm_automation_account.killswitch[0].id
+    runbook_name            = azurerm_automation_runbook.killswitch[0].name
+    webhook_resource_id     = azurerm_automation_webhook.killswitch[0].id
+    service_uri             = azurerm_automation_webhook.killswitch[0].uri
     is_global_runbook       = false
     use_common_alert_schema = true
   }

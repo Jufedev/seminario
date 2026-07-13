@@ -235,6 +235,37 @@ cancelara el run, Databricks lo reiniciaría solo y el cluster —y la factura�
 > **llegan con horas de retraso**: cuando el budget "vea" los $40, el gasto real puede
 > ser mayor. El freno de mano sigue siendo `make detector-stop` al terminar la demo.
 
+### Si el `apply` falla en el kill-switch: `enable_killswitch = false`
+
+Una suscripción de estudiante permite **una sola Automation Account por región**, y una
+cuenta **borrada retiene el cupo durante horas** — de forma **invisible**: `az automation
+account list` no devuelve nada mientras Azure sigue rechazando la creación con
+
+```
+400 "Only one account is allowed for your subscription per Region.
+     If Deleted recently, please restore the same account"
+```
+
+Como la única región legal es `eastus2` (ver abajo), **no hay a dónde escaparse**: un
+`deploy-down` seguido de un `deploy` el mismo día no puede crear el kill-switch.
+
+Eso **no debe bloquear el despliegue entero** ni —sobre todo— llevarse puestas las alertas
+del budget. Por eso el kill-switch es opcional:
+
+```hcl
+# infra/terraform.tfvars
+enable_killswitch = false
+```
+
+Con esto en `false`, **el budget sigue avisando por email en todos los umbrales**; lo único
+que se pierde es el apagado automático. Cuando Azure libere el cupo, poné `true` y
+`make deploy` otra vez (agrega los 9 recursos del kill-switch, no toca nada más).
+
+> El diseño anterior tenía el bug al revés: la notificación del 100% referenciaba el action
+> group, así que si la Automation Account fallaba **se caía el budget completo** — incluidos
+> los tres avisos por email que no la necesitan. Un guardián de costos que puede bloquear su
+> propio despliegue no es un guardián.
+
 ### La región del kill-switch: dos listas, una sola intersección
 
 La Automation Account es el único recurso al que **dos listas de regiones distintas** le

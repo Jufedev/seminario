@@ -61,6 +61,22 @@ variable "killswitch_location" {
   default     = "eastus2"
 }
 
+# The one-account-per-region cap has a nasty property: a DELETED account keeps holding the
+# slot for hours, and it is invisible (`az automation account list` returns nothing while
+# Azure still rejects the create with 400 "Only one account is allowed... If Deleted
+# recently, please restore the same account"). So a destroy followed by an apply the same
+# day cannot create the kill-switch, no matter what.
+#
+# That must not be able to block the whole deployment — and it must never take the budget's
+# EMAIL alerts down with it. With this off, the budget still notifies at every threshold;
+# what is lost is only the automatic shutdown. Turn it back on and re-apply once Azure
+# releases the slot.
+variable "enable_killswitch" {
+  description = "Create the budget kill-switch (Automation Account + runbook + action group). Set to false when Azure still holds the region's Automation slot from a recent delete: the budget keeps emailing, only the automatic shutdown is skipped."
+  type        = bool
+  default     = true
+}
+
 variable "killswitch_webhook_expiry" {
   description = "Expiry of the webhook the budget action group calls (RFC3339). After this date the kill-switch stops firing — re-apply to renew."
   type        = string

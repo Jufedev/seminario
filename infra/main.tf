@@ -366,14 +366,17 @@ resource "azurerm_consumption_budget_subscription" "guard" {
     contact_emails = var.budget_contact_emails
   }
 
-  # The kill-switch.
+  # The kill-switch. The action group is attached only when the kill-switch exists —
+  # otherwise this notification degrades to an email, instead of taking the whole budget
+  # (and with it the three warnings above) down with it. A cost guard that can block its
+  # own deployment is not a guard.
   notification {
     enabled        = true
     threshold      = 100
     operator       = "GreaterThanOrEqualTo"
     threshold_type = "Actual"
     contact_emails = var.budget_contact_emails
-    contact_groups = [azurerm_monitor_action_group.budget.id]
+    contact_groups = var.enable_killswitch ? [azurerm_monitor_action_group.budget[0].id] : []
   }
 
   lifecycle {
