@@ -11,7 +11,7 @@ repartida en cuatro resource groups (`network`, `compute`, `bigdata`, `storage`)
 | Storage ADLS Gen2 (LRS) | `stmetaverso*` | Archivo histórico de eventos (Big Data) | Centavos/mes |
 | Databricks (Standard) | `dbw-metaverso` | Ejecuta el job de Spark | $0 sin cluster; ~$0.50/hora con cluster single-node prendido |
 | Job de Spark (`infra/databricks/`) | `red-point-detector` | El detector, como job continuo sobre un job-cluster single-node | $0 pausado; ~$0.50/hora corriendo |
-| Budget alert (suscripción) | `budget-metaverso` | Aviso por email al 80% de $50/mes | Gratis |
+| Budget + kill-switch | `budget-metaverso`, `aa-metaverso-killswitch` | Avisos por email y apagado automático al llegar al tope (ver abajo) | Gratis (500 min/mes de Automation) |
 
 **Nota**: Event Hubs debe ser tier **Standard** — Basic no soporta el protocolo Kafka.
 
@@ -99,6 +99,52 @@ systemctl status metaverse-server         # ¿corre el backend?
 make detector-stop                  # imprescindible: es lo que cobra por hora
 ./scripts/deploy-azure.sh vm-stop   # opcional: la VM son ~$30/mes prendida
 ```
+
+## Presupuesto y kill-switch
+
+**Un budget de Azure no corta el gasto: solo avisa.** Azure no tiene un tope duro. Así
+que el budget, al llegar al 100%, además de mandar el mail dispara un **action group**
+→ **runbook de Automation** (`killswitch.ps1`) que apaga lo que cobra por hora.
+
+| Umbral | Qué pasa |
+|---|---|
+| **$10** (`budget_alert_amount`) | Email de aviso. No se toca nada. |
+| **$30** (75%) | Email. |
+| **Pronóstico de superar $40** | Email — es la **única** alerta que puede llegar ANTES de gastar la plata. |
+| **$40** (`budget_amount`) | Email + **kill-switch**: desasigna la VM y **pausa** los jobs de Databricks. |
+
+El runbook **no borra nada**: desasigna la VM (una VM "detenida" sigue cobrando; una
+*desasignada* no) y pausa los jobs. Volvés con `make detector-start` y
+`./scripts/deploy-azure.sh vm-start`.
+
+**Por qué pausa y no solo cancela:** el detector es un job **continuo**. Si solo se
+cancelara el run, Databricks lo reiniciaría solo y el cluster —y la factura— volverían.
+
+> ⚠️ **Esto es una red de seguridad, no un freno de mano.** Los datos de costo de Azure
+> **llegan con horas de retraso**: cuando el budget "vea" los $40, el gasto real puede
+> ser mayor. El freno de mano sigue siendo `make detector-stop` al terminar la demo.
+
+### Probalo ANTES de necesitarlo
+
+Un kill-switch que nunca se ejecutó es una suposición, no una protección. Después del
+primer `make deploy`, disparalo a mano una vez y mirá que la VM quede `deallocated`:
+
+```bash
+az automation runbook start \
+  --resource-group rg-metaverso-compute \
+  --automation-account-name aa-metaverso-killswitch \
+  --name Stop-BillableCompute
+
+az vm show -d -g rg-metaverso-compute -n vm-metaverso-app --query powerState -o tsv
+# -> "VM deallocated"
+```
+
+Si el runbook falla por módulos de PowerShell faltantes (`Az.Accounts` / `Az.Compute`),
+importalos desde la galería en el Automation Account — es la única dependencia externa
+que tiene.
+
+Ajustar los montos: `budget_alert_amount` (aviso) y `budget_amount` (corte) en
+`infra/terraform.tfvars`.
 
 > ⚠️ En prod el checkpoint guarda los offsets de Event Hubs: cambios de
 > ventana/agregación del detector requieren un plan de migración del

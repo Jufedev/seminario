@@ -17,6 +17,11 @@ locals {
     managed_by  = "terraform"
     workload    = "real-time-analytics"
   }
+
+  # Azure budgets take percentages, but the thing worth reasoning about is dollars.
+  # Keeping the early alert expressed in USD means it stays at $10 even if the ceiling
+  # moves.
+  budget_alert_threshold_pct = var.budget_alert_amount / var.budget_amount * 100
 }
 
 data "azurerm_subscription" "current" {}
@@ -276,8 +281,15 @@ resource "azurerm_databricks_workspace" "main" {
   tags                = local.tags
 }
 
-# --- Budget guard: alert before student credits burn out ------------------
+# --- Budget guard: alert early, then cut the bill --------------------------
 # Subscription-level so it covers all four resource groups at once.
+#
+# A budget only NOTIFIES — Azure has no hard spending cap. So the 100% notification
+# also hits an action group that fires the kill-switch runbook (killswitch.tf), which
+# deallocates the VM and pauses the Databricks jobs.
+#
+# ⚠️ Cost data lags by hours: treat this as a safety net, not a brake. The brake is
+# `make detector-stop` after the demo.
 
 resource "azurerm_consumption_budget_subscription" "guard" {
   name            = "budget-${var.project_name}"
@@ -289,11 +301,47 @@ resource "azurerm_consumption_budget_subscription" "guard" {
     start_date = var.budget_start_date
   }
 
+  # Early warning, expressed in dollars rather than a magic percentage.
   notification {
     enabled        = true
-    threshold      = 80
+    threshold      = local.budget_alert_threshold_pct
     operator       = "GreaterThanOrEqualTo"
     threshold_type = "Actual"
     contact_emails = var.budget_contact_emails
+  }
+
+  # Forecast: the only notification that can arrive BEFORE the money is spent, which
+  # matters precisely because actual-cost data is delayed.
+  notification {
+    enabled        = true
+    threshold      = 100
+    operator       = "GreaterThanOrEqualTo"
+    threshold_type = "Forecasted"
+    contact_emails = var.budget_contact_emails
+  }
+
+  notification {
+    enabled        = true
+    threshold      = 75
+    operator       = "GreaterThanOrEqualTo"
+    threshold_type = "Actual"
+    contact_emails = var.budget_contact_emails
+  }
+
+  # The kill-switch.
+  notification {
+    enabled        = true
+    threshold      = 100
+    operator       = "GreaterThanOrEqualTo"
+    threshold_type = "Actual"
+    contact_emails = var.budget_contact_emails
+    contact_groups = [azurerm_monitor_action_group.budget.id]
+  }
+
+  lifecycle {
+    precondition {
+      condition     = var.budget_alert_amount < var.budget_amount
+      error_message = "budget_alert_amount (the warning) must be below budget_amount (the kill-switch), otherwise the warning would fire together with the shutdown."
+    }
   }
 }

@@ -11,14 +11,36 @@ variable "location" {
 }
 
 variable "budget_amount" {
-  description = "Monthly budget in USD for the resource group alert"
+  description = "Monthly ceiling in USD. Reaching 100% of it fires the kill-switch: the VM is deallocated and the Databricks jobs are paused (nothing is deleted)."
   type        = number
-  default     = 50
+  default     = 40
+
+  validation {
+    condition     = var.budget_amount > 0
+    error_message = "budget_amount must be greater than 0."
+  }
+}
+
+variable "budget_alert_amount" {
+  description = "Spend in USD at which the first warning email is sent (no action taken)."
+  type        = number
+  default     = 10
+
+  validation {
+    condition     = var.budget_alert_amount > 0
+    error_message = "budget_alert_amount must be greater than 0."
+  }
 }
 
 variable "budget_contact_emails" {
-  description = "Emails notified when the budget threshold is reached"
+  description = "Emails notified at every budget threshold"
   type        = list(string)
+}
+
+variable "killswitch_webhook_expiry" {
+  description = "Expiry of the webhook the budget action group calls (RFC3339). After this date the kill-switch stops firing — re-apply to renew."
+  type        = string
+  default     = "2027-07-01T00:00:00Z"
 }
 
 variable "vm_size" {
