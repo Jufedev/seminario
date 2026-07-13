@@ -19,15 +19,28 @@ from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql.types import DoubleType, StringType, StructField, StructType
 
-KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP", "localhost:9092")
-INPUT_TOPIC = os.getenv("INPUT_TOPIC", "avatar-positions")
-OUTPUT_TOPIC = os.getenv("OUTPUT_TOPIC", "red-points")
-CHECKPOINT_DIR = os.getenv("CHECKPOINT_DIR", "./checkpoints/red-point-detector")
+
+def env(name: str, default: str = "") -> str:
+    """Read an env var, tolerating shell-style quoting.
+
+    Databricks exports a job's environment through a bash script, so values
+    holding a space or a `;` must be quoted there (`WINDOW_DURATION="10 seconds"`,
+    and above all the Event Hubs connection string, which would otherwise
+    truncate at its first `;`). Stripping the quotes here makes the same value
+    correct whether or not the runtime already removed them.
+    """
+    return os.getenv(name, default).strip().strip("\"'")
+
+
+KAFKA_BOOTSTRAP = env("KAFKA_BOOTSTRAP", "localhost:9092")
+INPUT_TOPIC = env("INPUT_TOPIC", "avatar-positions")
+OUTPUT_TOPIC = env("OUTPUT_TOPIC", "red-points")
+CHECKPOINT_DIR = env("CHECKPOINT_DIR", "./checkpoints/red-point-detector")
 
 # Optional historical archiving (thesis: ADLS archiving). When set, the parsed
 # avatar-positions feed is appended to Parquet at this path. Local dir in dev
 # (e.g. ./archive), abfss://... ADLS path in prod. Empty -> archiving disabled.
-ARCHIVE_PATH = os.getenv("ARCHIVE_PATH", "")
+ARCHIVE_PATH = env("ARCHIVE_PATH", "")
 
 # Detection parameters — these are the tunable knobs of the hypothesis:
 # a red point = at least MIN_STATIONARY_AVATARS distinct avatars below
@@ -48,26 +61,26 @@ ARCHIVE_PATH = os.getenv("ARCHIVE_PATH", "")
 # (square cells anchored at 0) makes each cell straddle two zone rows, so red
 # zones light up next to the congestion instead of on it. CELL_SIZE is the
 # square-cell fallback.
-CELL_SIZE = float(os.getenv("CELL_SIZE", "100"))
-CELL_SIZE_X = float(os.getenv("CELL_SIZE_X", str(CELL_SIZE)))
-CELL_SIZE_Y = float(os.getenv("CELL_SIZE_Y", str(CELL_SIZE)))
-GRID_ORIGIN_X = float(os.getenv("GRID_ORIGIN_X", "0"))
-GRID_ORIGIN_Y = float(os.getenv("GRID_ORIGIN_Y", "0"))
-SPEED_THRESHOLD = float(os.getenv("SPEED_THRESHOLD", "0.5"))
-MIN_STATIONARY_AVATARS = int(os.getenv("MIN_STATIONARY_AVATARS", "5"))
+CELL_SIZE = float(env("CELL_SIZE", "100"))
+CELL_SIZE_X = float(env("CELL_SIZE_X", str(CELL_SIZE)))
+CELL_SIZE_Y = float(env("CELL_SIZE_Y", str(CELL_SIZE)))
+GRID_ORIGIN_X = float(env("GRID_ORIGIN_X", "0"))
+GRID_ORIGIN_Y = float(env("GRID_ORIGIN_Y", "0"))
+SPEED_THRESHOLD = float(env("SPEED_THRESHOLD", "0.5"))
+MIN_STATIONARY_AVATARS = int(env("MIN_STATIONARY_AVATARS", "5"))
 # Avatars emit at 1 Hz, so stationary samples per avatar ≈ seconds stopped.
 # Must exceed the simulator's 8 s traffic-light phase (LIGHT_PERIOD) so a
 # normal light stop can never qualify — only genuinely stuck traffic does.
-MIN_MEAN_DWELL_S = float(os.getenv("MIN_MEAN_DWELL_S", "12"))
+MIN_MEAN_DWELL_S = float(env("MIN_MEAN_DWELL_S", "12"))
 # WINDOW_DURATION is the H1 experimental variable: it trades detection
 # stability for how fast a cleared street stops re-emitting (worst case
 # ~window + TTL after the congestion dissolves).
-WINDOW_DURATION = os.getenv("WINDOW_DURATION", "30 seconds")
-WINDOW_SLIDE = os.getenv("WINDOW_SLIDE", "10 seconds")
-WATERMARK_DELAY = os.getenv("WATERMARK_DELAY", "30 seconds")
+WINDOW_DURATION = env("WINDOW_DURATION", "30 seconds")
+WINDOW_SLIDE = env("WINDOW_SLIDE", "10 seconds")
+WATERMARK_DELAY = env("WATERMARK_DELAY", "30 seconds")
 
 # When set, connects to Azure Event Hubs instead of local Kafka
-EVENTHUBS_CONNECTION_STRING = os.getenv("EVENTHUBS_CONNECTION_STRING", "")
+EVENTHUBS_CONNECTION_STRING = env("EVENTHUBS_CONNECTION_STRING", "")
 
 POSITION_SCHEMA = StructType(
     [
@@ -231,9 +244,7 @@ def main() -> None:
     # Parquet (local dir in dev, abfss:// ADLS path in prod). Env-driven, so the
     # same code archives locally or to ADLS with no change. Disabled when empty.
     if ARCHIVE_PATH:
-        archive_checkpoint = os.getenv(
-            "ARCHIVE_CHECKPOINT_DIR", CHECKPOINT_DIR + "-archive"
-        )
+        archive_checkpoint = env("ARCHIVE_CHECKPOINT_DIR", CHECKPOINT_DIR + "-archive")
         (
             parsed.writeStream.format("parquet")
             .option("path", ARCHIVE_PATH)

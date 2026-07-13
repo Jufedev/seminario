@@ -30,11 +30,14 @@ GRID_ORIGIN_Y ?= -195
         kafka-install kafka-start kafka-stop kafka-status kafka-logs consume \
         detector \
         metaverse-install metaverse-test metaverse-server metaverse-web \
+        deploy detector-start detector-stop deploy-status deploy-down \
         infra-init infra-plan infra-apply \
         docker-kafka-up docker-kafka-down clean
 
 help: ## Show available targets
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
+	@# -h: `-include .env` puts a second file in MAKEFILE_LIST, and grep would
+	@# then prefix every match with its filename instead of the target name.
+	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
 
 # --- Environment (dev) ------------------------------------------------------
@@ -96,6 +99,23 @@ dev: ## Bring up the WHOLE local loop with one command (Kafka+detector+server+we
 	./scripts/dev-up.sh
 
 # --- Infrastructure (prod — Azure via Terraform) ----------------------------
+# deploy is the whole thing (infra + app on the VM + the Spark job); the
+# infra-* targets are the escape hatch for driving Terraform by hand.
+
+deploy: ## Deploy EVERYTHING to Azure (infra + app VM + Databricks detector job)
+	./scripts/deploy-azure.sh up
+
+detector-start: ## Turn the Azure detector ON (starts the Databricks job cluster — bills per hour)
+	./scripts/deploy-azure.sh start
+
+detector-stop: ## Turn the Azure detector OFF (terminates the cluster — back to $0/hour)
+	./scripts/deploy-azure.sh stop
+
+deploy-status: ## Show the Azure deployment status (web, VM, detector)
+	./scripts/deploy-azure.sh status
+
+deploy-down: ## Destroy the whole Azure deployment
+	./scripts/deploy-azure.sh down
 
 infra-init: ## terraform init (needs ARM_SUBSCRIPTION_ID)
 	cd infra && terraform init

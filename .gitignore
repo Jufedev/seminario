@@ -13,3 +13,9 @@ logs/
 infra/.terraform/
 infra/*.tfstate*
 infra/terraform.tfvars
+infra/databricks/.terraform/
+infra/databricks/*.tfstate*
+infra/databricks/terraform.tfvars
+
+# Prod profile rendered from the Terraform outputs (holds the Event Hubs key)
+.env.azure

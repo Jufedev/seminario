@@ -23,3 +23,20 @@ output "databricks_workspace_url" {
   description = "Databricks workspace URL (create the cluster and job here)"
   value       = "https://${azurerm_databricks_workspace.main.workspace_url}"
 }
+
+# --- Inputs consumed by the second stage (infra/databricks) ----------------
+# The detector job lives in its own root module so that the Databricks provider
+# is never configured with values that do not exist yet (a provider cannot be
+# configured from a resource created in the same apply). scripts/deploy-azure.sh
+# pipes these outputs into that module.
+
+output "databricks_workspace_id" {
+  description = "Azure resource ID of the Databricks workspace (used to authenticate the databricks provider)"
+  value       = azurerm_databricks_workspace.main.id
+}
+
+output "datalake_access_key" {
+  description = "Primary access key of the ADLS account (only needed when the detector archives to ADLS)"
+  value       = azurerm_storage_account.datalake.primary_access_key
+  sensitive   = true
+}

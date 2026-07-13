@@ -10,6 +10,7 @@ repartida en cuatro resource groups (`network`, `compute`, `bigdata`, `storage`)
 | Event Hubs (Standard, 1 TU) | `evhns-metaverso-*` | Kafka administrado: `avatar-positions`, `red-points` y `sim-events` (topics internos consolidados — el tier Standard permite máx. 10 hubs) | ~$11/mes fijo |
 | Storage ADLS Gen2 (LRS) | `stmetaverso*` | Archivo histórico de eventos (Big Data) | Centavos/mes |
 | Databricks (Standard) | `dbw-metaverso` | Ejecuta el job de Spark | $0 sin cluster; ~$0.50/hora con cluster single-node prendido |
+| Job de Spark (`infra/databricks/`) | `red-point-detector` | El detector, como job continuo sobre un job-cluster single-node | $0 pausado; ~$0.50/hora corriendo |
 | Budget alert (suscripción) | `budget-metaverso` | Aviso por email al 80% de $50/mes | Gratis |
 
 **Nota**: Event Hubs debe ser tier **Standard** — Basic no soporta el protocolo Kafka.
@@ -22,88 +23,86 @@ repartida en cuatro resource groups (`network`, `compute`, `bigdata`, `storage`)
 - **El repositorio debe ser público**: cloud-init lo clona por HTTPS sin
   credenciales para desplegar la app en la VM (o pasar `repo_url` con token).
 
-## Despliegue a Azure real
+## Despliegue
+
+Todo el ciclo de vida está automatizado en `scripts/deploy-azure.sh` (desde la
+raíz del repo). El script no reemplaza a Terraform: lo orquesta, y todo lo que
+crea es declarativo.
 
 ```bash
-cd infra
-export ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
-
-# Variables obligatorias (terraform.tfvars está gitignoreado a propósito):
-cat > terraform.tfvars <<'EOF'
-budget_contact_emails = ["correo@ejemplo.com"]
-vm_ssh_public_key     = "ssh-ed25519 AAAA... usuario@maquina"
-EOF
-
-terraform init
-terraform validate
-terraform plan      # revisar: ~20 recursos a crear
-terraform apply
+make deploy            # infra + app en la VM + job del detector (creado PAUSADO)
+make detector-start    # detector ON  — arranca el job-cluster de Databricks
+make deploy-status     # IP, web, estado de la VM y del detector
+make detector-stop     # detector OFF — termina el cluster: vuelve a $0/hora
+make deploy-down       # terraform destroy de todo
 ```
 
-## Después del `apply` — paso a paso para poner a correr el proyecto
+`make deploy` hace, en orden:
 
-### 1. Verificar la VM (automática, ~5 minutos)
+1. **Preflight**: `az login` activo; el repo es **público** y tu HEAD está
+   **pusheado** (cloud-init clona GitHub anónimamente — si el repo es privado la
+   VM arranca vacía, y si no pusheaste despliega código viejo, en ambos casos con
+   el `apply` en verde).
+2. Genera `infra/terraform.tfvars` (email del presupuesto, llave SSH — la crea si
+   no existe, `repo_url` derivado de tu `origin`).
+3. `terraform apply` en `infra/` — Azure.
+4. `terraform apply` en `infra/databricks/` — el job de Spark, cableado con los
+   outputs del paso anterior y con la calibración leída de `env/env.prod.example`.
+5. Escribe `.env.azure` (perfil listo para correr el detector/metaverso local
+   contra Azure: `cp .env.azure .env`).
+6. Espera a que cloud-init termine y la web responda 200.
 
-cloud-init instala bun y nginx, clona el repo, buildea el cliente y deja el
-backend corriendo como servicio systemd con las credenciales de Event Hubs ya
-inyectadas por Terraform. No hay que copiar nada a mano.
+Variables opcionales: `BUDGET_EMAIL`, `SSH_PUBLIC_KEY_FILE`, `ENABLE_ARCHIVE=true`
+(archiva el histórico de posiciones en ADLS).
 
-```bash
-terraform output vm_public_ip
-# Abrir http://<esa-ip> en el navegador → debe cargar el metaverso
-```
+### Las dos etapas de Terraform
 
-Si no carga, diagnosticar por SSH:
+`infra/databricks/` es un módulo raíz aparte, no un capricho: el provider
+`databricks` necesita la URL del workspace, y **un provider no se puede
+configurar con un valor que se crea en el mismo `apply`**. Separarlos hace que
+cada etapa sea aplicable y re-aplicable sola.
 
-```bash
-ssh azureuser@<ip>
-sudo cat /var/log/cloud-init-output.log   # ¿falló el clone/build?
-systemctl status metaverse-server         # ¿corre el backend?
-journalctl -u metaverse-server -n 50      # sus logs
-```
+### El detector: encendido y apagado
 
-### 2. Databricks — el detector Spark (manual, la única pieza que falta)
+El job se crea **continuo y pausado**. `detector_running` es el interruptor:
+pausarlo cancela el run, lo que termina el job-cluster — el único recurso que
+cobra por hora. Por eso el detector apagado cuesta $0 y no hay que acordarse de
+apagar ningún cluster a mano después de la demo.
 
-El workspace se crea VACÍO; sin este paso **no hay zonas rojas**:
+Databricks exporta las variables de entorno del job **a través de bash**, así que
+el módulo las escribe entre comillas: sin ellas la connection string de Event Hubs
+se cortaría en su primer `;` y `10 seconds` se partiría en dos palabras. El
+detector las lee con un `env()` que tolera comillas, así que el mismo valor es
+correcto en local y en Databricks.
 
-1. Entrar al workspace: `terraform output databricks_workspace_url`
-2. Crear un cluster **single-node** (Standard_DS3_v2 o menor) con
-   auto-terminate de 30 min.
-3. Subir `pipeline/red_point_detector.py` como job.
-4. Configurar las variables de entorno del job:
-
-   ```
-   KAFKA_BOOTSTRAP             = (terraform output kafka_bootstrap)
-   EVENTHUBS_CONNECTION_STRING = (terraform output -raw eventhubs_connection_string)
-   CELL_SIZE_X=30  CELL_SIZE_Y=30  GRID_ORIGIN_X=-240  GRID_ORIGIN_Y=-195
-   WINDOW_DURATION=10 seconds   WINDOW_SLIDE=5 seconds
-   MIN_MEAN_DWELL_S=5           MIN_STATIONARY_AVATARS=7
-   CHECKPOINT_DIR=dbfs:/checkpoints/red-point-detector
-   ARCHIVE_PATH=abfss://avatar-events@<cuenta>.dfs.core.windows.net/positions   # opcional
-   ```
-
-   La cuenta de storage sale de `terraform output datalake_account`.
-5. Ejecutar el job y dejarlo corriendo durante la demo.
-
-> ⚠️ En prod el checkpoint guarda los offsets de Event Hubs: cambios de
-> ventana/agregación del detector requieren un plan de migración del
-> checkpoint, no un borrado alegre como en dev.
-
-### 3. Verificación end-to-end
+### Verificación end-to-end
 
 1. Navegador → `http://<vm_public_ip>` → crear sala como admin.
 2. Usuarios se unen con el código, configuran flotas grandes y las invocan.
 3. Al formarse una cola (≥7 detenidos ~5 s en una celda), la zona se pinta de
    roja y las rutas la esquivan; al drenarse, se apaga en ~15-20 s.
-4. Si no aparecen zonas: revisar que el job de Databricks esté corriendo y
-   mirar el heartbeat del backend (`journalctl -u metaverse-server | grep heartbeat`
-   — `redpoints:` debe crecer).
+4. Si no aparecen zonas: `make deploy-status` (¿el detector está ON?), el run en
+   la UI de Databricks, y el heartbeat del backend
+   (`journalctl -u metaverse-server | grep heartbeat` — `redpoints:` debe crecer).
 
-### 4. Después de cada demo
+Si la web no carga, diagnosticar por SSH:
 
-- **Apagar el cluster de Databricks** — es el único recurso que cobra por hora.
-- Opcional: desasignar la VM (`az vm deallocate -g rg-metaverso-compute -n vm-metaverso-app`)
-  para no consumir sus ~$30/mes fuera de las demos.
+```bash
+ssh azureuser@<ip>
+sudo cat /var/log/cloud-init-output.log   # ¿falló el clone/build?
+systemctl status metaverse-server         # ¿corre el backend?
+```
+
+### Después de cada demo
+
+```bash
+make detector-stop                  # imprescindible: es lo que cobra por hora
+./scripts/deploy-azure.sh vm-stop   # opcional: la VM son ~$30/mes prendida
+```
+
+> ⚠️ En prod el checkpoint guarda los offsets de Event Hubs: cambios de
+> ventana/agregación del detector requieren un plan de migración del
+> checkpoint, no un borrado alegre como en dev.
 
 ## Prueba local con Floci (opcional, antes de gastar créditos)
 

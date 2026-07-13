@@ -35,9 +35,10 @@ metaverse/        Metaverso Three.js — fuente de datos + render (corre con bun
   server/         Servidor autoritativo + puente Kafka (avatar-positions / red-points)
   src/            Cliente del navegador (render, red, vistas) — solo modo online
 pipeline/         Big Data — el detector Spark (red_point_detector.py)
-infra/            Terraform (Azure: Event Hubs + Databricks + ADLS) — entorno productivo
+infra/            Terraform (Azure: Event Hubs + Databricks + ADLS + VM) — entorno productivo
+  databricks/     2ª etapa: el job de Spark dentro del workspace
 env/              Perfiles de entorno: env.dev.example · env.prod.example
-scripts/          kafka-local.sh (Kafka nativo, KRaft)
+scripts/          kafka-local.sh (Kafka nativo) · dev-up.sh (loop local) · deploy-azure.sh (Azure)
 tests/            Test de la lógica de detección
 docs/             Contrato de integración, bitácora de decisiones, diagramas
 ```
@@ -101,16 +102,20 @@ detenidos en una celda (debe detectarse), 4 detenidos (bajo el umbral, no debe),
 
 ## Entorno de producción (Azure)
 
-El mismo código corre contra Azure cambiando solo el perfil de entorno:
+El mismo código corre contra Azure — un solo comando lo despliega entero:
 
 ```bash
-cp env/env.prod.example .env    # completar con los outputs de Terraform
-make infra-init && make infra-plan && make infra-apply
+make deploy            # infra + app en la VM + job del detector (Databricks)
+make detector-start    # enciende el detector para la demo
+make detector-stop     # apagalo al terminar (es lo único que cobra por hora)
 ```
 
-`infra/` provisiona el endpoint Kafka de Event Hubs, Databricks (Spark) y ADLS.
+`infra/` provisiona el endpoint Kafka de Event Hubs, Databricks (Spark), ADLS, la
+red y la VM que sirve el metaverso; `infra/databricks/` define el job de Spark.
 Event Hubs expone el protocolo Kafka, así que ni el detector ni el metaverso
 cambian una línea: solo `KAFKA_BOOTSTRAP` + `EVENTHUBS_CONNECTION_STRING`.
+
+Detalle del ciclo de vida, costos y verificación: [`infra/README.md`](infra/README.md).
 
 ## Documentación
 
