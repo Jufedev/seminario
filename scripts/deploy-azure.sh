@@ -204,13 +204,20 @@ write_env_azure() {
 
 # --- Terraform -------------------------------------------------------------
 
-apply_args() { [ "$AUTO" = 1 ] && printf -- '-auto-approve'; }
+# `-input=false` le prohíbe a Terraform preguntar. Sin `-auto-approve`, eso significa
+# que imprime el pedido de confirmación, descubre que no puede leer la respuesta y se
+# cancela solo: el camino interactivo sería imposible de aprobar. Van juntos o no van.
+apply_args() {
+  if [ "$AUTO" = 1 ]; then
+    printf -- '-input=false -auto-approve'
+  fi
+}
 
 tf_apply() {
   local dir="$1"; shift
   terraform -chdir="$dir" init -input=false >/dev/null
   # shellcheck disable=SC2046
-  terraform -chdir="$dir" apply -input=false $(apply_args) "$@"
+  terraform -chdir="$dir" apply $(apply_args) "$@"
 }
 
 # --- Espera a que la VM sirva la web ---------------------------------------
@@ -320,10 +327,10 @@ cmd_down() {
   say "Destruyendo TODO (Databricks primero, después la infra)"
   if [ -f "$DBX/terraform.tfvars" ]; then
     # shellcheck disable=SC2046
-    terraform -chdir="$DBX" destroy -input=false $(apply_args)
+    terraform -chdir="$DBX" destroy $(apply_args)
   fi
   # shellcheck disable=SC2046
-  terraform -chdir="$INFRA" destroy -input=false $(apply_args)
+  terraform -chdir="$INFRA" destroy $(apply_args)
   rm -f "$ENV_OUT"
   ok "No queda nada corriendo en Azure"
 }
