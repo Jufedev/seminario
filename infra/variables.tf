@@ -41,18 +41,24 @@ variable "budget_contact_emails" {
   type        = list(string)
 }
 
-# A student subscription allows only ONE Automation Account per region, and deleting one
-# does not free the slot immediately ("If Deleted recently, please restore the same
-# account"). A single destroy/apply cycle is therefore enough to lock you out of the
-# region for hours.
+# Two different region lists constrain this resource, and only their intersection is legal:
 #
-# The account does not need to live where the resources it manages live — the Azure
-# control plane is global — so it sits in a different allowed region and the main region
-# keeps its slot free. Must still be a region the subscription's policy permits.
+#   1. The subscription policy "Allowed resource deployment regions":
+#      southcentralus, brazilsouth, eastus2, mexicocentral, canadacentral.
+#   2. Azure Automation on a Student/Free subscription, which rejects every region outside
+#      eastus, eastus2, westus, northeurope, southeastasia, japanwest with a 400.
+#
+# The intersection is eastus2 — the compute region itself. There is no other valid choice,
+# so this cannot be used to keep the main region's Automation slot free.
+#
+# The slot matters because a student subscription allows one Automation Account per region
+# and a deleted one keeps holding it for hours ("If Deleted recently, please restore the
+# same account"). A destroy immediately followed by an apply can therefore fail here; wait,
+# or apply with -target to skip the kill-switch until the slot is released.
 variable "killswitch_location" {
-  description = "Region for the kill-switch Automation Account. Deliberately different from var.location: only one Automation Account is allowed per region, and a recently deleted one keeps holding the slot."
+  description = "Region for the kill-switch Automation Account. Must satisfy BOTH the subscription's allowed-regions policy and the Student-subscription Automation region list — which leaves eastus2 as the only valid value."
   type        = string
-  default     = "southcentralus"
+  default     = "eastus2"
 }
 
 variable "killswitch_webhook_expiry" {

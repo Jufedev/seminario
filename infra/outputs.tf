@@ -21,7 +21,7 @@ output "vm_public_ip" {
 
 output "databricks_workspace_url" {
   description = "Databricks workspace URL (create the cluster and job here)"
-  value       = "https://${azurerm_databricks_workspace.main.workspace_url}"
+  value       = "https://${azurerm_databricks_workspace.detector.workspace_url}"
 }
 
 # --- Inputs consumed by the second stage (infra/databricks) ----------------
@@ -32,7 +32,7 @@ output "databricks_workspace_url" {
 
 output "databricks_workspace_id" {
   description = "Azure resource ID of the Databricks workspace (used to authenticate the databricks provider)"
-  value       = azurerm_databricks_workspace.main.id
+  value       = azurerm_databricks_workspace.detector.id
 }
 
 output "datalake_access_key" {

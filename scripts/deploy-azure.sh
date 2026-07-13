@@ -26,11 +26,14 @@ ENV_OUT=".env.azure"              # perfil listo para correr local contra Azure
 AUTO=0        # -y : no preguntar en los apply/destroy
 FORCE=0       # --force : seguir aunque el repo no esté pusheado
 
-# Deben coincidir con infra/variables.tf (project_name, vm_admin_username).
+# Deben coincidir con infra/variables.tf (project_name, vm_admin_username) y con los
+# nombres de infra/main.tf.
 PROJECT="metaverso"
 VM_USER="azureuser"
-VM_RG="rg-${PROJECT}-compute"
+VM_RG="rg-${PROJECT}-app"
 VM_NAME="vm-${PROJECT}-app"
+# Databricks crea este resource group solo; Terraform NO lo conoce y no lo borra.
+DBX_MANAGED_RG="rg-${PROJECT}-databricks-managed"
 
 # --- Salida ----------------------------------------------------------------
 
@@ -59,7 +62,24 @@ preflight() {
   ok "Suscripción $(az account show --query name -o tsv)"
 
   check_repo_reachable
+  check_no_orphan_databricks_rg
   ok "Preflight OK"
+}
+
+# Un `down` anterior pudo dejar el managed RG de Databricks en pie (Terraform no lo
+# borra: no es suyo). Su nombre deriva del nuestro, así que un resto BLOQUEA la creación
+# del próximo workspace — y el apply muere recién en la etapa 1, con todo lo demás ya creado.
+check_no_orphan_databricks_rg() {
+  az group show -n "$DBX_MANAGED_RG" >/dev/null 2>&1 || { ok "Sin restos de Databricks"; return 0; }
+  warn "Quedó el resource group $DBX_MANAGED_RG de un despliegue anterior: bloquearía el workspace nuevo."
+  purge_databricks_managed_rg
+  say "Esperando a que Azure lo termine de borrar"
+  for _ in $(seq 1 60); do
+    az group show -n "$DBX_MANAGED_RG" >/dev/null 2>&1 || { ok "Limpio"; return 0; }
+    printf '.'; sleep 10
+  done
+  printf '\n'
+  die "Azure sigue borrando $DBX_MANAGED_RG después de 10 min. Esperá y reintentá."
 }
 
 # cloud-init clona el repo por HTTPS SIN credenciales para desplegar la app en la
@@ -332,7 +352,22 @@ cmd_down() {
   # shellcheck disable=SC2046
   terraform -chdir="$INFRA" destroy $(apply_args)
   rm -f "$ENV_OUT"
+
+  # `terraform destroy` sale en verde y deja basura: el managed RG de Databricks no es
+  # suyo, así que no lo toca. Borrar el workspace se lleva el NAT gateway y su IP (lo
+  # que cobra por hora), pero SOBREVIVEN el storage de DBFS y el access connector de
+  # Unity Catalog — y con ellos ahí, el próximo workspace no se puede crear.
+  purge_databricks_managed_rg
+
   ok "No queda nada corriendo en Azure"
+}
+
+# Idempotente: si el RG no existe, no hace nada.
+purge_databricks_managed_rg() {
+  az group show -n "$DBX_MANAGED_RG" >/dev/null 2>&1 || return 0
+  say "Limpiando el resource group que Databricks deja huérfano ($DBX_MANAGED_RG)"
+  az group delete -n "$DBX_MANAGED_RG" --yes --no-wait
+  ok "Borrado lanzado (Azure lo completa en segundo plano)"
 }
 
 usage() {

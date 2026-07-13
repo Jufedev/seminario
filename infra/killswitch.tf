@@ -10,14 +10,13 @@
 
 resource "azurerm_automation_account" "killswitch" {
   name = "aa-${var.project_name}-killswitch"
-  # Not the compute region — see var.killswitch_location: a student subscription allows
-  # one Automation Account per region and a deleted one keeps the slot for hours, so a
-  # single destroy/apply cycle would lock the main region out. What it manages is
-  # unaffected: the Azure control plane is global.
+  # See var.killswitch_location: a Student subscription restricts Automation Accounts to
+  # its own region list, and the only region that list shares with the subscription's
+  # allowed-regions policy is eastus2 — the compute region. It cannot live anywhere else.
   location            = var.killswitch_location
-  resource_group_name = azurerm_resource_group.compute.name
+  resource_group_name = azurerm_resource_group.governance.name
   sku_name            = "Basic" # 500 free job-minutes/month; this runs for seconds
-  tags                = local.tags
+  tags                = merge(local.tags, { proposito = "Kill-switch: al tocar el tope del presupuesto apaga lo que cobra por hora" })
 
   identity {
     type = "SystemAssigned"
@@ -26,38 +25,42 @@ resource "azurerm_automation_account" "killswitch" {
 
 # The runbook reads its targets from these variables instead of being templated, so the
 # PowerShell file stays a plain, testable script with no interpolation in it.
+#
+# Note the two different groups in play: these variables LIVE next to the Automation
+# Account (governance), but their VALUE points at the VM's group (app) — that is the
+# target the runbook has to deallocate.
 resource "azurerm_automation_variable_string" "vm_resource_group" {
   name                    = "VmResourceGroup"
-  resource_group_name     = azurerm_resource_group.compute.name
+  resource_group_name     = azurerm_resource_group.governance.name
   automation_account_name = azurerm_automation_account.killswitch.name
-  value                   = azurerm_resource_group.compute.name
+  value                   = azurerm_resource_group.app.name
 }
 
 resource "azurerm_automation_variable_string" "vm_name" {
   name                    = "VmName"
-  resource_group_name     = azurerm_resource_group.compute.name
+  resource_group_name     = azurerm_resource_group.governance.name
   automation_account_name = azurerm_automation_account.killswitch.name
   value                   = azurerm_linux_virtual_machine.app.name
 }
 
 resource "azurerm_automation_variable_string" "databricks_url" {
   name                    = "DatabricksUrl"
-  resource_group_name     = azurerm_resource_group.compute.name
+  resource_group_name     = azurerm_resource_group.governance.name
   automation_account_name = azurerm_automation_account.killswitch.name
-  value                   = "https://${azurerm_databricks_workspace.main.workspace_url}"
+  value                   = "https://${azurerm_databricks_workspace.detector.workspace_url}"
 }
 
 # Permissions: scoped to the two resource groups it must act on, not the subscription.
 # Contributor on the Databricks workspace's RG also makes the identity a workspace admin
 # in Azure Databricks, which is what lets the runbook call the Jobs API.
-resource "azurerm_role_assignment" "killswitch_compute" {
-  scope                = azurerm_resource_group.compute.id
+resource "azurerm_role_assignment" "killswitch_app" {
+  scope                = azurerm_resource_group.app.id
   role_definition_name = "Contributor"
   principal_id         = azurerm_automation_account.killswitch.identity[0].principal_id
 }
 
-resource "azurerm_role_assignment" "killswitch_bigdata" {
-  scope                = azurerm_resource_group.bigdata.id
+resource "azurerm_role_assignment" "killswitch_analytics" {
+  scope                = azurerm_resource_group.analytics.id
   role_definition_name = "Contributor"
   principal_id         = azurerm_automation_account.killswitch.identity[0].principal_id
 }
@@ -65,19 +68,19 @@ resource "azurerm_role_assignment" "killswitch_bigdata" {
 resource "azurerm_automation_runbook" "killswitch" {
   name                    = "Stop-BillableCompute"
   location                = azurerm_automation_account.killswitch.location
-  resource_group_name     = azurerm_resource_group.compute.name
+  resource_group_name     = azurerm_resource_group.governance.name
   automation_account_name = azurerm_automation_account.killswitch.name
   runbook_type            = "PowerShell"
   log_progress            = true
   log_verbose             = true
   description             = "Deallocates the app VM and pauses the Databricks jobs when the budget is hit"
   content                 = file("${path.module}/killswitch.ps1")
-  tags                    = local.tags
+  tags                    = merge(local.tags, { proposito = "El script que desasigna la VM y pausa los jobs de Databricks" })
 }
 
 resource "azurerm_automation_webhook" "killswitch" {
   name                    = "wh-killswitch"
-  resource_group_name     = azurerm_resource_group.compute.name
+  resource_group_name     = azurerm_resource_group.governance.name
   automation_account_name = azurerm_automation_account.killswitch.name
   expiry_time             = var.killswitch_webhook_expiry
   enabled                 = true
@@ -86,9 +89,9 @@ resource "azurerm_automation_webhook" "killswitch" {
 
 resource "azurerm_monitor_action_group" "budget" {
   name                = "ag-${var.project_name}-budget"
-  resource_group_name = azurerm_resource_group.compute.name
+  resource_group_name = azurerm_resource_group.governance.name
   short_name          = "budgetkill"
-  tags                = local.tags
+  tags                = merge(local.tags, { proposito = "Avisa por email y dispara el kill-switch cuando el presupuesto llega al tope" })
 
   dynamic "email_receiver" {
     for_each = var.budget_contact_emails

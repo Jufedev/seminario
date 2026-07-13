@@ -35,45 +35,65 @@ resource "random_string" "suffix" {
 }
 
 # --- Resource groups -------------------------------------------------------
+# One resource group per ROLE in the pipeline, not per Azure resource category:
+# someone opening the portal should be able to tell what a group holds without
+# opening it. Every group also carries a `proposito` tag, which the portal can
+# show as a column.
+#
+# A sixth group appears in the portal that is NOT declared here:
+# rg-<project>-databricks-managed. Databricks creates it (see the workspace
+# below) and Terraform never owns it.
 
 resource "azurerm_resource_group" "network" {
   name     = "rg-${var.project_name}-network"
   location = var.location
-  tags     = local.tags
+  tags     = merge(local.tags, { proposito = "Red de la VM: VNet, subnet publica y las reglas de firewall (NSG)" })
 }
 
-resource "azurerm_resource_group" "compute" {
-  name     = "rg-${var.project_name}-compute"
+resource "azurerm_resource_group" "app" {
+  name     = "rg-${var.project_name}-app"
   location = var.location
-  tags     = local.tags
+  tags     = merge(local.tags, { proposito = "La VM que sirve el metaverso: frontend Three.js + backend WebSocket" })
 }
 
-resource "azurerm_resource_group" "bigdata" {
-  name     = "rg-${var.project_name}-bigdata"
+resource "azurerm_resource_group" "streaming" {
+  name     = "rg-${var.project_name}-streaming"
   location = var.location
-  tags     = local.tags
+  tags     = merge(local.tags, { proposito = "Transporte de eventos: Event Hubs, el 'Kafka' administrado del pipeline" })
 }
 
-resource "azurerm_resource_group" "storage" {
-  name     = "rg-${var.project_name}-storage"
+resource "azurerm_resource_group" "analytics" {
+  name     = "rg-${var.project_name}-analytics"
   location = var.location
-  tags     = local.tags
+  tags     = merge(local.tags, { proposito = "Procesamiento: Databricks, donde corre el detector de zonas rojas en Spark" })
+}
+
+resource "azurerm_resource_group" "datalake" {
+  name     = "rg-${var.project_name}-datalake"
+  location = var.location
+  tags     = merge(local.tags, { proposito = "Archivo historico de eventos en ADLS Gen2 (la pata Big Data)" })
+}
+
+resource "azurerm_resource_group" "governance" {
+  name     = "rg-${var.project_name}-governance"
+  location = var.location
+  tags     = merge(local.tags, { proposito = "Control de gasto: el kill-switch del presupuesto (no sirve trafico)" })
 }
 
 # --- Network: VNet with a public subnet for the app VM --------------------
 
-resource "azurerm_virtual_network" "main" {
-  name                = "vnet-${var.project_name}"
+resource "azurerm_virtual_network" "app" {
+  name                = "vnet-${var.project_name}-app"
   location            = azurerm_resource_group.network.location
   resource_group_name = azurerm_resource_group.network.name
   address_space       = ["10.0.0.0/16"]
-  tags                = local.tags
+  tags                = merge(local.tags, { proposito = "Red privada de la VM del metaverso" })
 }
 
-resource "azurerm_subnet" "public" {
-  name                 = "snet-${var.project_name}-public"
+resource "azurerm_subnet" "app_public" {
+  name                 = "snet-${var.project_name}-app-public"
   resource_group_name  = azurerm_resource_group.network.name
-  virtual_network_name = azurerm_virtual_network.main.name
+  virtual_network_name = azurerm_virtual_network.app.name
   address_prefixes     = ["10.0.1.0/24"]
 }
 
@@ -81,7 +101,7 @@ resource "azurerm_network_security_group" "app" {
   name                = "nsg-${var.project_name}-app"
   location            = azurerm_resource_group.network.location
   resource_group_name = azurerm_resource_group.network.name
-  tags                = local.tags
+  tags                = merge(local.tags, { proposito = "Firewall de la VM: abre SSH (22), web (80) y WebSocket (8080)" })
 
   security_rule {
     name                       = "allow-ssh"
@@ -121,7 +141,7 @@ resource "azurerm_network_security_group" "app" {
 }
 
 resource "azurerm_subnet_network_security_group_association" "public" {
-  subnet_id                 = azurerm_subnet.public.id
+  subnet_id                 = azurerm_subnet.app_public.id
   network_security_group_id = azurerm_network_security_group.app.id
 }
 
@@ -129,22 +149,22 @@ resource "azurerm_subnet_network_security_group_association" "public" {
 
 resource "azurerm_public_ip" "app" {
   name                = "pip-${var.project_name}-app"
-  location            = azurerm_resource_group.compute.location
-  resource_group_name = azurerm_resource_group.compute.name
+  location            = azurerm_resource_group.app.location
+  resource_group_name = azurerm_resource_group.app.name
   allocation_method   = "Static"
   sku                 = "Standard"
-  tags                = local.tags
+  tags                = merge(local.tags, { proposito = "IP publica fija por la que el equipo entra al metaverso" })
 }
 
 resource "azurerm_network_interface" "app" {
   name                = "nic-${var.project_name}-app"
-  location            = azurerm_resource_group.compute.location
-  resource_group_name = azurerm_resource_group.compute.name
-  tags                = local.tags
+  location            = azurerm_resource_group.app.location
+  resource_group_name = azurerm_resource_group.app.name
+  tags                = merge(local.tags, { proposito = "Placa de red de la VM: la conecta a la subnet y a su IP publica" })
 
   ip_configuration {
     name                          = "primary"
-    subnet_id                     = azurerm_subnet.public.id
+    subnet_id                     = azurerm_subnet.app_public.id
     private_ip_address_allocation = "Dynamic"
     public_ip_address_id          = azurerm_public_ip.app.id
   }
@@ -152,12 +172,12 @@ resource "azurerm_network_interface" "app" {
 
 resource "azurerm_linux_virtual_machine" "app" {
   name                  = "vm-${var.project_name}-app"
-  location              = azurerm_resource_group.compute.location
-  resource_group_name   = azurerm_resource_group.compute.name
+  location              = azurerm_resource_group.app.location
+  resource_group_name   = azurerm_resource_group.app.name
   size                  = var.vm_size
   admin_username        = var.vm_admin_username
   network_interface_ids = [azurerm_network_interface.app.id]
-  tags                  = local.tags
+  tags                  = merge(local.tags, { proposito = "Sirve el frontend Three.js (nginx :80) y el backend WebSocket (bun :8080)" })
 
   admin_ssh_key {
     username   = var.vm_admin_username
@@ -193,12 +213,12 @@ resource "azurerm_linux_virtual_machine" "app" {
 
 resource "azurerm_eventhub_namespace" "main" {
   name                = "evhns-${var.project_name}-${random_string.suffix.result}"
-  location            = azurerm_resource_group.bigdata.location
-  resource_group_name = azurerm_resource_group.bigdata.name
+  location            = azurerm_resource_group.streaming.location
+  resource_group_name = azurerm_resource_group.streaming.name
   sku                 = "Standard"
   capacity            = 1
   minimum_tls_version = "1.2"
-  tags                = local.tags
+  tags                = merge(local.tags, { proposito = "El 'Kafka' del pipeline: transporta avatar-positions, red-points y sim-events" })
 }
 
 resource "azurerm_eventhub" "avatar_positions" {
@@ -229,14 +249,14 @@ resource "azurerm_eventhub_consumer_group" "spark_detector" {
   name                = "spark-detector"
   namespace_name      = azurerm_eventhub_namespace.main.name
   eventhub_name       = azurerm_eventhub.avatar_positions.name
-  resource_group_name = azurerm_resource_group.bigdata.name
+  resource_group_name = azurerm_resource_group.streaming.name
 }
 
 resource "azurerm_eventhub_consumer_group" "metaverse_backend" {
   name                = "metaverse-backend"
   namespace_name      = azurerm_eventhub_namespace.main.name
   eventhub_name       = azurerm_eventhub.red_points.name
-  resource_group_name = azurerm_resource_group.bigdata.name
+  resource_group_name = azurerm_resource_group.streaming.name
 }
 
 # Single namespace-level connection string for producer, Spark and consumer.
@@ -244,7 +264,7 @@ resource "azurerm_eventhub_consumer_group" "metaverse_backend" {
 resource "azurerm_eventhub_namespace_authorization_rule" "app" {
   name                = "app-access"
   namespace_name      = azurerm_eventhub_namespace.main.name
-  resource_group_name = azurerm_resource_group.bigdata.name
+  resource_group_name = azurerm_resource_group.streaming.name
   listen              = true
   send                = true
   manage              = false
@@ -254,14 +274,16 @@ resource "azurerm_eventhub_namespace_authorization_rule" "app" {
 
 resource "azurerm_storage_account" "datalake" {
   name                            = "st${var.project_name}${random_string.suffix.result}"
-  location                        = azurerm_resource_group.storage.location
-  resource_group_name             = azurerm_resource_group.storage.name
+  location                        = azurerm_resource_group.datalake.location
+  resource_group_name             = azurerm_resource_group.datalake.name
   account_tier                    = "Standard"
   account_replication_type        = "LRS"
   is_hns_enabled                  = true # hierarchical namespace = ADLS Gen2
   min_tls_version                 = "TLS1_2"
   allow_nested_items_to_be_public = false # no anonymous public blob access
-  tags                            = local.tags
+  # The name cannot be more descriptive than this: Azure caps storage account names at
+  # 24 characters, lowercase alphanumeric only — no hyphens. The tag carries the meaning.
+  tags = merge(local.tags, { proposito = "Archivo historico crudo de posiciones de avatares (opt-in: ENABLE_ARCHIVE=true)" })
 }
 
 resource "azurerm_storage_data_lake_gen2_filesystem" "events" {
@@ -273,15 +295,28 @@ resource "azurerm_storage_data_lake_gen2_filesystem" "events" {
 # The workspace itself costs nothing while no cluster is running; the cost
 # is per cluster-hour. Create single-node clusters for demos and stop them.
 
-resource "azurerm_databricks_workspace" "main" {
-  name                = "dbw-${var.project_name}"
-  location            = azurerm_resource_group.bigdata.location
-  resource_group_name = azurerm_resource_group.bigdata.name
+resource "azurerm_databricks_workspace" "detector" {
+  name                = "dbw-${var.project_name}-detector"
+  location            = azurerm_resource_group.analytics.location
+  resource_group_name = azurerm_resource_group.analytics.name
   # Azure retired the Standard SKU: creating one now fails with
-  # "DatabricksStandardSkuNotSupported". Premium is the floor. The workspace itself
-  # still costs nothing; the bill is per cluster-hour (a slightly higher DBU rate).
-  sku  = "premium"
-  tags = local.tags
+  # "DatabricksStandardSkuNotSupported". Premium is the floor.
+  sku = "premium"
+
+  # Databricks creates a SECOND resource group of its own, which Terraform does not
+  # own and `terraform destroy` does not delete. Naming it explicitly means the team
+  # can recognise it in the portal and scripts/deploy-azure.sh can clean it up.
+  #
+  # What Databricks puts in there: the DBFS root storage account, a Unity Catalog
+  # access connector, the workers VNet + NSG, and — while the workspace exists — a NAT
+  # gateway with a public IP. That NAT gateway is how the cluster reaches the internet:
+  # secure cluster connectivity gives the workers no public IP, so their only way out is
+  # SNAT through it. It bills ~$0.045/h for as long as the workspace exists, cluster or
+  # no cluster, and it is deleted with the workspace. The DBFS storage and the connector
+  # are what survive, and they must be removed before the next workspace can be created.
+  managed_resource_group_name = "rg-${var.project_name}-databricks-managed"
+
+  tags = merge(local.tags, { proposito = "Corre el detector de zonas rojas (Spark Structured Streaming) como job continuo" })
 }
 
 # --- Budget guard: alert early, then cut the bill --------------------------
