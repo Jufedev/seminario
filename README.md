@@ -46,8 +46,8 @@ docs/             Contrato de integración, bitácora de decisiones, diagramas
 ## Requisitos
 
 Todo corre dentro del **distrobox `seminario`** para no ensuciar el host. El
-manifiesto `distrobox.ini` lo recrea con Java 17, Python y bun (no se instala
-node: el servidor Node corre con bun).
+manifiesto `distrobox.ini` lo recrea con Java 17, Python, bun (no se instala
+node: el servidor Node corre con bun) y el Azure CLI que necesita el despliegue.
 
 ## Puesta en marcha (entorno de desarrollo)
 
@@ -102,20 +102,74 @@ detenidos en una celda (debe detectarse), 4 detenidos (bajo el umbral, no debe),
 
 ## Entorno de producción (Azure)
 
-El mismo código corre contra Azure — un solo comando lo despliega entero:
+El mismo código corre contra Azure sin cambiar una línea: Event Hubs expone el
+protocolo Kafka, así que el detector y el metaverso solo cambian de
+`KAFKA_BOOTSTRAP` + `EVENTHUBS_CONNECTION_STRING`. `infra/` provisiona la red, la
+VM que sirve el metaverso, Event Hubs, ADLS y Databricks; `infra/databricks/`
+define el job de Spark dentro del workspace.
+
+### Antes de desplegar (una sola vez)
+
+1. **Suscripción activa** y sesión de Azure: `az login`.
+2. **El repo tiene que ser público.** cloud-init lo clona por HTTPS **sin
+   credenciales** para desplegar la app en la VM: si es privado, la VM arranca
+   vacía y el `terraform apply` igual sale en verde. El preflight lo verifica.
+3. **Tu HEAD tiene que estar pusheado.** La VM clona GitHub, no tu working copy:
+   sin `git push` desplegarías código viejo sin enterarte. El preflight también
+   lo verifica.
+
+`terraform` y `az` ya vienen en el distrobox (ver `distrobox.ini`).
+
+### Desplegar
 
 ```bash
-make deploy            # infra + app en la VM + job del detector (Databricks)
-make detector-start    # enciende el detector para la demo
-make detector-stop     # apagalo al terminar (es lo único que cobra por hora)
+make deploy
 ```
 
-`infra/` provisiona el endpoint Kafka de Event Hubs, Databricks (Spark), ADLS, la
-red y la VM que sirve el metaverso; `infra/databricks/` define el job de Spark.
-Event Hubs expone el protocolo Kafka, así que ni el detector ni el metaverso
-cambian una línea: solo `KAFKA_BOOTSTRAP` + `EVENTHUBS_CONNECTION_STRING`.
+Un solo comando hace todo lo que antes era una checklist manual:
 
-Detalle del ciclo de vida, costos y verificación: [`infra/README.md`](infra/README.md).
+| Paso | Qué hace |
+|---|---|
+| Preflight | Sesión de Azure, repo público, HEAD pusheado |
+| `infra/terraform.tfvars` | Lo genera (email del presupuesto + llave SSH — la crea si no existe) |
+| Etapa 1 · `terraform apply` | Red, VM, Event Hubs, ADLS, Databricks, alerta de presupuesto |
+| Etapa 2 · `terraform apply` | Sube `red_point_detector.py` y crea el job, **pausado** |
+| `.env.azure` | Perfil listo para correr el detector/metaverso local contra Azure |
+| Espera | Hasta que cloud-init termine y la web responda (~5 min) |
+
+Al final imprime la URL del metaverso y la del job de Databricks.
+
+### Correr la demo
+
+```bash
+make detector-start    # detector ON — el job-cluster tarda ~5 min en arrancar
+make deploy-status     # IP, web, VM, estado del detector
+make detector-stop     # detector OFF — imprescindible al terminar
+```
+
+El detector es un job **continuo** sobre un job-cluster: pausarlo cancela el run
+y **termina el cluster**, que es el único recurso que cobra por hora. Con el
+detector apagado, la demo cuesta $0/hora. La VM sí sigue consumiendo (~$30/mes);
+para apagarla también: `./scripts/deploy-azure.sh vm-stop`.
+
+**Verificación end-to-end:** abrir la web, crear una sala como admin, unir
+usuarios con el código e invocar flotas grandes. Al formarse una cola (≥7
+avatares detenidos ~5 s en una celda) la zona se pinta de roja y las rutas la
+esquivan. Si no aparecen zonas rojas, el sospechoso es el detector: `make
+deploy-status` dice si está ON, y el link al job muestra el log del driver.
+
+> Sin el detector corriendo no hay zonas rojas — igual que en dev: la detección
+> vive en el Big Data.
+
+### Destruir todo
+
+```bash
+make deploy-down
+```
+
+Detalle de recursos, costos por recurso e internals (por qué son dos etapas de
+Terraform, el quoting de las variables de entorno de Databricks):
+[`infra/README.md`](infra/README.md).
 
 ## Documentación
 
