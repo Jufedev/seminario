@@ -4,7 +4,9 @@ __pycache__/
 .env
 node_modules/
 dist/
+# Presentation and reference material — internal, never published to the remote
 *.pdf
+*.pptx
 
 # Local dev logs (make dev)
 logs/
