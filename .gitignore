@@ -12,9 +12,14 @@ dist/
 logs/
 
 # Terraform working files (provider binaries and state stay local)
+# TWO root modules, TWO states: infra/ (the workload, destroyed per demo) and
+# infra/governance/ (the budget + kill-switch, applied once and never destroyed).
 infra/.terraform/
 infra/*.tfstate*
 infra/terraform.tfvars
+infra/governance/.terraform/
+infra/governance/*.tfstate*
+infra/governance/terraform.tfvars
 # Detector calibration, regenerated from env/env.prod.example on every deploy
 infra/detector.auto.tfvars
 

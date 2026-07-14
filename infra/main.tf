@@ -1,4 +1,4 @@
-# Real-time analytics infrastructure for the metaverse traffic project.
+# Real-time analytics infrastructure for the metaverse traffic project — THE WORKLOAD.
 #
 # Pipeline:  metaverse backend -> Event Hubs (Kafka endpoint) -> the detector
 #            container (Spark Structured Streaming, see detector.tf)
@@ -7,30 +7,34 @@
 # Compute:   one VM hosting the metaverse frontend and backend, plus the
 #            serverless container that runs the detector.
 #
-# ONE root module, ONE `terraform apply`, ONE state. Nothing here needs a provider
-# configured from a value created in the same apply, which is the only thing that
-# would force splitting this into stages.
+# EVERYTHING IN THIS MODULE BILLS, AND EVERYTHING IN IT IS EPHEMERAL. `make deploy-down`
+# destroys this state and nothing else. The budget, the action group and the kill-switch
+# live in governance/ — a SEPARATE root module with a SEPARATE state, applied once and
+# never torn down, because a cost guard that dies with the thing it guards is not a guard.
+# governance/main.tf explains the split; infra/README.md explains what the operator sees.
 #
-# Layout follows docs/arquitectura.drawio: one resource group per pipeline role
-# under SUB-Prod. The management group and subscription are managed outside
-# Terraform.
+# The six resource groups belong to governance too. They are free, they are the skeleton,
+# and they are what the kill-switch's RG-scoped role assignments are pinned to — so they
+# have to still be standing after a teardown. This module only LOOKS THEM UP (below).
+#
+# Layout follows docs/arquitectura.drawio: one resource group per pipeline role under
+# SUB-Prod. The management group and subscription are managed outside Terraform.
 
 locals {
-  # Governance tags (Well-Architected: operational excellence)
+  # Governance tags (Well-Architected: operational excellence). They are for humans and for
+  # cost reporting — `az resource list --query "[].{n:name, p:tags.proposito}"`.
+  #
+  # They are NOT how the kill-switch finds its targets: the runbook lists the app and
+  # analytics resource groups directly (governance/killswitch.ps1 explains why a tag query
+  # would fail silently on a four-action role). So a missing tag here costs you a readable
+  # portal, not a budget cut that never fires.
   tags = {
     project     = var.project_name
     environment = "production"
     managed_by  = "terraform"
     workload    = "real-time-analytics"
   }
-
-  # Azure budgets take percentages, but the thing worth reasoning about is dollars.
-  # Keeping the early alert expressed in USD means it stays at $10 even if the ceiling
-  # moves.
-  budget_alert_threshold_pct = var.budget_alert_amount / var.budget_amount * 100
 }
-
-data "azurerm_subscription" "current" {}
 
 resource "random_string" "suffix" {
   length  = 6
@@ -40,74 +44,59 @@ resource "random_string" "suffix" {
   special = false
 }
 
-# --- Resource groups -------------------------------------------------------
-# One resource group per ROLE in the pipeline, not per Azure resource category:
-# someone opening the portal should be able to tell what a group holds without
-# opening it. Every group also carries a `proposito` tag, which the portal can
-# show as a column.
+# --- Resource groups: looked up, not created -------------------------------
+# They are declared in governance/, whose state a demo teardown never touches. The names are
+# deterministic (`rg-<project>-<role>`), so a data source is all the coupling needed — no
+# remote state, no outputs to wire, no ordering to get right beyond "governance first".
 #
-# Six groups, and six is what the portal shows: everything that exists in Azure is
-# declared here, so a seventh group means somebody created something by hand.
+# If governance has not been applied, these lookups fail with "Resource Group not found" and
+# the apply stops before creating anything. That is the correct failure: the workload cannot
+# exist without the skeleton, and it must not silently invent its own.
+#
+# Their `location` also feeds every resource below, which is why the workload does not
+# declare a region of its own: the skeleton decides where the deployment lives.
 
-resource "azurerm_resource_group" "network" {
-  name     = "rg-${var.project_name}-network"
-  location = var.location
-  tags     = merge(local.tags, { proposito = "Red de la VM: VNet, subnet publica y las reglas de firewall (NSG)" })
+data "azurerm_resource_group" "network" {
+  name = "rg-${var.project_name}-network"
 }
 
-resource "azurerm_resource_group" "app" {
-  name     = "rg-${var.project_name}-app"
-  location = var.location
-  tags     = merge(local.tags, { proposito = "La VM que sirve el metaverso: frontend Three.js + backend WebSocket" })
+data "azurerm_resource_group" "app" {
+  name = "rg-${var.project_name}-app"
 }
 
-resource "azurerm_resource_group" "streaming" {
-  name     = "rg-${var.project_name}-streaming"
-  location = var.location
-  tags     = merge(local.tags, { proposito = "Transporte de eventos: Event Hubs, el 'Kafka' administrado del pipeline" })
+data "azurerm_resource_group" "streaming" {
+  name = "rg-${var.project_name}-streaming"
 }
 
-# The analytics group holds the detector's whole runtime: registry, Container Apps
-# environment, the detector app and its logs — see detector.tf.
-resource "azurerm_resource_group" "analytics" {
-  name     = "rg-${var.project_name}-analytics"
-  location = var.location
-  tags     = merge(local.tags, { proposito = "Procesamiento: el contenedor donde corre el detector de zonas rojas en Spark" })
+data "azurerm_resource_group" "analytics" {
+  name = "rg-${var.project_name}-analytics"
 }
 
-resource "azurerm_resource_group" "datalake" {
-  name     = "rg-${var.project_name}-datalake"
-  location = var.location
-  tags     = merge(local.tags, { proposito = "Archivo historico de eventos en ADLS Gen2 (la pata Big Data)" })
-}
-
-resource "azurerm_resource_group" "governance" {
-  name     = "rg-${var.project_name}-governance"
-  location = var.location
-  tags     = merge(local.tags, { proposito = "Control de gasto: el kill-switch del presupuesto (no sirve trafico)" })
+data "azurerm_resource_group" "datalake" {
+  name = "rg-${var.project_name}-datalake"
 }
 
 # --- Network: VNet with a public subnet for the app VM --------------------
 
 resource "azurerm_virtual_network" "app" {
   name                = "vnet-${var.project_name}-app"
-  location            = azurerm_resource_group.network.location
-  resource_group_name = azurerm_resource_group.network.name
+  location            = data.azurerm_resource_group.network.location
+  resource_group_name = data.azurerm_resource_group.network.name
   address_space       = ["10.0.0.0/16"]
   tags                = merge(local.tags, { proposito = "Red privada de la VM del metaverso" })
 }
 
 resource "azurerm_subnet" "app_public" {
   name                 = "snet-${var.project_name}-app-public"
-  resource_group_name  = azurerm_resource_group.network.name
+  resource_group_name  = data.azurerm_resource_group.network.name
   virtual_network_name = azurerm_virtual_network.app.name
   address_prefixes     = ["10.0.1.0/24"]
 }
 
 resource "azurerm_network_security_group" "app" {
   name                = "nsg-${var.project_name}-app"
-  location            = azurerm_resource_group.network.location
-  resource_group_name = azurerm_resource_group.network.name
+  location            = data.azurerm_resource_group.network.location
+  resource_group_name = data.azurerm_resource_group.network.name
   tags                = merge(local.tags, { proposito = "Firewall de la VM: abre SSH (22), web (80) y WebSocket (8080)" })
 
   security_rule {
@@ -156,8 +145,8 @@ resource "azurerm_subnet_network_security_group_association" "public" {
 
 resource "azurerm_public_ip" "app" {
   name                = "pip-${var.project_name}-app"
-  location            = azurerm_resource_group.app.location
-  resource_group_name = azurerm_resource_group.app.name
+  location            = data.azurerm_resource_group.app.location
+  resource_group_name = data.azurerm_resource_group.app.name
   allocation_method   = "Static"
   sku                 = "Standard"
   tags                = merge(local.tags, { proposito = "IP publica fija por la que el equipo entra al metaverso" })
@@ -165,8 +154,8 @@ resource "azurerm_public_ip" "app" {
 
 resource "azurerm_network_interface" "app" {
   name                = "nic-${var.project_name}-app"
-  location            = azurerm_resource_group.app.location
-  resource_group_name = azurerm_resource_group.app.name
+  location            = data.azurerm_resource_group.app.location
+  resource_group_name = data.azurerm_resource_group.app.name
   tags                = merge(local.tags, { proposito = "Placa de red de la VM: la conecta a la subnet y a su IP publica" })
 
   ip_configuration {
@@ -179,12 +168,16 @@ resource "azurerm_network_interface" "app" {
 
 resource "azurerm_linux_virtual_machine" "app" {
   name                  = "vm-${var.project_name}-app"
-  location              = azurerm_resource_group.app.location
-  resource_group_name   = azurerm_resource_group.app.name
+  location              = data.azurerm_resource_group.app.location
+  resource_group_name   = data.azurerm_resource_group.app.name
   size                  = var.vm_size
   admin_username        = var.vm_admin_username
   network_interface_ids = [azurerm_network_interface.app.id]
-  tags                  = merge(local.tags, { proposito = "Sirve el frontend Three.js (nginx :80) y el backend WebSocket (bun :8080)" })
+  # What makes this VM reachable by the kill-switch is the resource group it lives in, not
+  # its tags: the runbook lists rg-<project>-app and deallocates whatever VM it finds there
+  # (governance/killswitch.ps1 explains why a tag query would fail silently). Move this VM to
+  # another group and the guard stops seeing it — and it would keep billing through a cut.
+  tags = merge(local.tags, { proposito = "Sirve el frontend Three.js (nginx :80) y el backend WebSocket (bun :8080)" })
 
   admin_ssh_key {
     username   = var.vm_admin_username
@@ -220,8 +213,8 @@ resource "azurerm_linux_virtual_machine" "app" {
 
 resource "azurerm_eventhub_namespace" "main" {
   name                = "evhns-${var.project_name}-${random_string.suffix.result}"
-  location            = azurerm_resource_group.streaming.location
-  resource_group_name = azurerm_resource_group.streaming.name
+  location            = data.azurerm_resource_group.streaming.location
+  resource_group_name = data.azurerm_resource_group.streaming.name
   sku                 = "Standard"
   capacity            = 1
   minimum_tls_version = "1.2"
@@ -280,7 +273,7 @@ resource "azurerm_eventhub" "sim_events" {
 resource "azurerm_eventhub_namespace_authorization_rule" "app" {
   name                = "app-access"
   namespace_name      = azurerm_eventhub_namespace.main.name
-  resource_group_name = azurerm_resource_group.streaming.name
+  resource_group_name = data.azurerm_resource_group.streaming.name
   listen              = true
   send                = true
   manage              = false
@@ -290,8 +283,8 @@ resource "azurerm_eventhub_namespace_authorization_rule" "app" {
 
 resource "azurerm_storage_account" "datalake" {
   name                            = "st${var.project_name}${random_string.suffix.result}"
-  location                        = azurerm_resource_group.datalake.location
-  resource_group_name             = azurerm_resource_group.datalake.name
+  location                        = data.azurerm_resource_group.datalake.location
+  resource_group_name             = data.azurerm_resource_group.datalake.name
   account_tier                    = "Standard"
   account_replication_type        = "LRS"
   is_hns_enabled                  = true # hierarchical namespace = ADLS Gen2
@@ -299,7 +292,7 @@ resource "azurerm_storage_account" "datalake" {
   allow_nested_items_to_be_public = false # no anonymous public blob access
 
   # Stated explicitly rather than left to the provider default, because the detector
-  # now depends on it to start at all: Spark opens the checkpoint over abfss:// with
+  # depends on it to start at all: Spark opens the checkpoint over abfss:// with
   # shared-key auth. If a subscription policy ever turns account keys off, the failure
   # would surface as a detector that cannot open its checkpoint — nowhere near the
   # setting that caused it. Declaring it means Terraform, not a policy, owns the answer.
@@ -323,71 +316,3 @@ resource "azurerm_storage_data_lake_gen2_filesystem" "events" {
 # --- The detector -----------------------------------------------------------
 # It runs as a container on Azure Container Apps: see detector.tf, which also
 # explains why a container and not a cluster.
-
-# --- Budget guard: alert early, then cut the bill --------------------------
-# Subscription-level so it covers every resource group at once.
-#
-# A budget only NOTIFIES — Azure has no hard spending cap. So the 100% notification
-# also hits an action group that fires the kill-switch runbook (killswitch.tf), which
-# deallocates the VM and scales the detector container down to zero replicas.
-#
-# ⚠️ Cost data lags by hours: treat this as a safety net, not a brake. The brake is
-# `make detector-stop` after the demo.
-
-resource "azurerm_consumption_budget_subscription" "guard" {
-  name            = "budget-${var.project_name}"
-  subscription_id = data.azurerm_subscription.current.id
-  amount          = var.budget_amount
-  time_grain      = "Monthly"
-
-  time_period {
-    start_date = var.budget_start_date
-  }
-
-  # Early warning, expressed in dollars rather than a magic percentage.
-  notification {
-    enabled        = true
-    threshold      = local.budget_alert_threshold_pct
-    operator       = "GreaterThanOrEqualTo"
-    threshold_type = "Actual"
-    contact_emails = var.budget_contact_emails
-  }
-
-  # Forecast: the only notification that can arrive BEFORE the money is spent, which
-  # matters precisely because actual-cost data is delayed.
-  notification {
-    enabled        = true
-    threshold      = 100
-    operator       = "GreaterThanOrEqualTo"
-    threshold_type = "Forecasted"
-    contact_emails = var.budget_contact_emails
-  }
-
-  notification {
-    enabled        = true
-    threshold      = 75
-    operator       = "GreaterThanOrEqualTo"
-    threshold_type = "Actual"
-    contact_emails = var.budget_contact_emails
-  }
-
-  # The kill-switch. The action group is attached only when the kill-switch exists —
-  # otherwise this notification degrades to an email, instead of taking the whole budget
-  # (and with it the three warnings above) down with it. A cost guard that can block its
-  # own deployment is not a guard.
-  notification {
-    enabled        = true
-    threshold      = 100
-    operator       = "GreaterThanOrEqualTo"
-    threshold_type = "Actual"
-    contact_emails = var.budget_contact_emails
-    contact_groups = var.enable_killswitch ? [azurerm_monitor_action_group.budget[0].id] : []
-  }
-
-  lifecycle {
-    precondition {
-      condition     = var.budget_alert_amount < var.budget_amount
-      error_message = "budget_alert_amount (the warning) must be below budget_amount (the kill-switch), otherwise the warning would fire together with the shutdown."
-    }
-  }
-}

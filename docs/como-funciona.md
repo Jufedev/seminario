@@ -443,11 +443,16 @@ make dev     # Kafka + detector Spark + servidor + cliente web
 **Azure:**
 
 ```bash
-make deploy          # infra + app + contenedor del detector (apagado)
+make deploy          # gobernanza + infra + app + contenedor del detector (apagado)
 make detector-start  # detector ON  — el contenedor levanta en segundos
 make detector-stop   # detector OFF — apagalo apenas termine la demo
-make deploy-down     # destruye TODO — lo único que deja el gasto en $0
+make deploy-down     # destruye todo lo que COBRA — lo único que deja el gasto en $0
 ```
+
+> `make deploy-down` deja en pie el **presupuesto** y el **kill-switch** (viven en un state
+> aparte, `infra/governance/`, que la demo no destruye) y los seis resource groups, vacíos.
+> Todo eso cuesta **$0**: un guardián de costos que se destruye junto con lo que guarda no es
+> un guardián.
 
 > **Ojo con "apagar":** `make detector-stop` apaga el **contenedor**, no el despliegue. La
 > VM, Event Hubs, el registro de imágenes, la IP pública y el disco **siguen cobrando**

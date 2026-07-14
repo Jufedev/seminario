@@ -33,12 +33,33 @@ resource "azurerm_automation_account" "killswitch" {
   }
 }
 
-# The runbook reads its targets from these variables instead of being templated, so the
-# PowerShell file stays a plain, testable script with no interpolation in it.
+# What the runbook is told: WHERE to look. Never WHAT it will find.
 #
-# Note the two different groups in play: these variables LIVE next to the Automation
-# Account (governance), but their VALUE points at the VM's group (app) — that is the
-# target the runbook has to deallocate.
+# All three values below are properties of THIS module — the subscription it guards and two
+# resource groups it creates itself. It is NOT handed the VM's name or the detector's
+# resource id: those are WORKLOAD identifiers, destroyed and recreated on every demo cycle,
+# and pinning them here would put the guard's lifetime back inside the lifetime of the thing
+# it guards — the exact coupling this split exists to remove. The runbook lists whatever is
+# in those groups at run time, which answers correctly in both states of the world: workload
+# up (find it, stop it), workload down (find nothing, nothing bills, nothing to do).
+#
+# WHY the groups and not a subscription-wide tag query. A tagged `Get-AzResource` looks
+# tidier and is a TRAP: it is `GET /subscriptions/{id}/resources`, a SUBSCRIPTION-scope read
+# needing `Microsoft.Resources/subscriptions/resources/read`. This identity holds four
+# actions, assigned at two RESOURCE GROUPS and nowhere else — so that call would come back
+# empty for a PERMISSIONS reason indistinguishable from "the workload is not deployed". The
+# guard would report success, cut nothing, and let the bill run on the one day it mattered.
+# Listing one resource type inside one group needs only that type's `read` action, which is
+# exactly what the role below grants.
+resource "azurerm_automation_variable_string" "subscription_id" {
+  count = var.enable_killswitch ? 1 : 0
+
+  name                    = "SubscriptionId"
+  resource_group_name     = azurerm_resource_group.governance.name
+  automation_account_name = azurerm_automation_account.killswitch[0].name
+  value                   = data.azurerm_subscription.current.subscription_id
+}
+
 resource "azurerm_automation_variable_string" "vm_resource_group" {
   count = var.enable_killswitch ? 1 : 0
 
@@ -48,30 +69,19 @@ resource "azurerm_automation_variable_string" "vm_resource_group" {
   value                   = azurerm_resource_group.app.name
 }
 
-resource "azurerm_automation_variable_string" "vm_name" {
+resource "azurerm_automation_variable_string" "detector_resource_group" {
   count = var.enable_killswitch ? 1 : 0
 
-  name                    = "VmName"
+  name                    = "DetectorResourceGroup"
   resource_group_name     = azurerm_resource_group.governance.name
   automation_account_name = azurerm_automation_account.killswitch[0].name
-  value                   = azurerm_linux_virtual_machine.app.name
-}
-
-# The runbook reaches the Container App through the ARM API, so the full resource ID is
-# all it needs — no per-service SDK, no endpoint URL to keep in sync.
-resource "azurerm_automation_variable_string" "detector_app_id" {
-  count = var.enable_killswitch ? 1 : 0
-
-  name                    = "DetectorAppId"
-  resource_group_name     = azurerm_resource_group.governance.name
-  automation_account_name = azurerm_automation_account.killswitch[0].name
-  value                   = azurerm_container_app.detector.id
+  value                   = azurerm_resource_group.analytics.name
 }
 
 # Permissions: a custom role with FOUR actions, not Contributor.
 #
-# Contributor at RG scope was the easy answer and the wrong one. rg-analytics now holds
-# the container registry, the Container Apps environment and the detector app itself, so
+# Contributor at RG scope was the easy answer and the wrong one. rg-analytics holds the
+# container registry, the Container Apps environment and the detector app itself, so
 # Contributor there would let a WEBHOOK-REACHABLE identity — the budget action group
 # calls it over a URL — delete the registry, rewrite the app's image, or read its
 # secrets. killswitch.ps1 says in its own header that it must not be able to mangle the
@@ -87,6 +97,11 @@ resource "azurerm_automation_variable_string" "detector_app_id" {
 # write is the floor, not a compromise we chose. What the scoping DOES buy is that the
 # blast radius stops at the Container App — the registry, the environment and the
 # Log Analytics workspace in the same group stay out of reach entirely.
+#
+# The two `read` actions are also what makes the DISCOVERY work: listing one resource type
+# inside one resource group needs exactly that type's `read` at that scope. So the runbook
+# can enumerate the app VM and the detector Container App without holding a single
+# subscription-level permission.
 resource "azurerm_role_definition" "killswitch" {
   count = var.enable_killswitch ? 1 : 0
 
@@ -105,6 +120,11 @@ resource "azurerm_role_definition" "killswitch" {
   }
 
   # Where the role may be USED. Narrower than where it is defined.
+  #
+  # These are RESOURCE GROUP scopes, and they keep working across a workload teardown for
+  # exactly one reason: the groups are declared in this module, so they survive it. A grant
+  # scoped to a group that gets deleted every demo would have to be widened to the whole
+  # subscription — which is the trade this split refuses to make.
   assignable_scopes = [
     azurerm_resource_group.app.id,
     azurerm_resource_group.analytics.id,

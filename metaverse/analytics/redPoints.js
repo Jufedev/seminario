@@ -23,9 +23,19 @@ import { zoneIndexAt } from '../server/zoneGrid.js'
 
 export const RED_POINTS_TOPIC = 'red-points'
 
-// Spark re-emite cada celda roja en cada slide de la ventana (~10s, modo
-// "update"). 15s de TTL sobrevive a un slide perdido antes de apagar una
-// zona que ya no se re-emite, y apaga rápido las zonas ya despejadas.
+// Spark re-emite cada celda roja UNA VEZ POR SLIDE mientras la congestión dure
+// (modo "update"). El slide calibrado es de 5s (WINDOW_SLIDE en env/), no los 10s
+// del default del código: si dimensionás este TTL leyendo el .py, lo dimensionás
+// contra parámetros que nadie usa.
+//
+// Con slide de 5s, 15s de TTL tolera DOS re-emisiones perdidas seguidas y recién
+// se apaga en la tercera. Ese es el margen: suficiente para que un mensaje perdido
+// no haga parpadear una zona viva, y corto para que una calle ya despejada se
+// apague sola en ~15s (no existe evento de "bloqueo resuelto": la zona muere de
+// hambre, no por aviso).
+//
+// OJO: este número está ACOPLADO a WINDOW_SLIDE. Si alguien alarga el slide, hay
+// que alargar el TTL o las zonas van a parpadear.
 const TTL_MS = 15_000
 
 // Clave para red-points sin sala atribuible: sus zonas las ven TODAS las salas.

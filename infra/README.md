@@ -2,8 +2,13 @@
 
 Provisiona la arquitectura de analítica en tiempo real (ver `docs/arquitectura.drawio`).
 
-**Una sola etapa de Terraform.** El detector corre como **contenedor** en Azure Container
-Apps, no en un cluster. El porqué está en [El detector: por qué un contenedor y no un
+**Dos módulos raíz, dos states**: `infra/governance/` (el guardián del gasto: se aplica una
+vez y **no se destruye**) e `infra/` (el workload: **todo lo que cobra**, y es lo que
+`make deploy-down` destruye). El porqué está en [Dos states: el guardián sobrevive a lo que
+guarda](#dos-states-el-guardián-sobrevive-a-lo-que-guarda).
+
+El detector corre como **contenedor** en Azure Container Apps, no en un cluster. El porqué
+está en [El detector: por qué un contenedor y no un
 cluster](#el-detector-por-qué-un-contenedor-y-no-un-cluster).
 
 ## Cómo están nombradas las cosas
@@ -21,7 +26,15 @@ el portal tiene que poder decir qué hay adentro de un grupo **sin abrirlo**.
 | `rg-metaverso-governance` | `budget-metaverso`, `ag-metaverso-budget`, `aa-metaverso-killswitch` — control de gasto. No sirve tráfico | Gratis |
 
 **Seis grupos, y seis es lo que muestra el portal.** Todo lo que existe en Azure está
-declarado en `infra/`: si el portal muestra un séptimo grupo, alguien creó algo a mano.
+declarado en uno de los dos módulos: si el portal muestra un séptimo grupo, alguien creó
+algo a mano.
+
+**Los seis grupos los crea `infra/governance/`**, no `infra/`. Son gratis, son el esqueleto,
+y tienen que seguir en pie cuando el workload no está: es a ellos que están *scopeadas* las
+asignaciones de rol del kill-switch. El workload los **busca** con
+`data "azurerm_resource_group"` — los nombres son deterministas (`rg-<project>-<rol>`), así
+que no hace falta compartir state entre los módulos. Después de un `make deploy-down` vas a
+ver los seis grupos **vacíos** en el portal, y eso es lo correcto.
 
 **Los nombres cortos van acompañados de un tag `proposito`** (en español, en cada recurso). Es
 la salida al problema de que Azure limita los nombres: un storage account no puede pasar de 24
@@ -285,11 +298,11 @@ crea es declarativo.
 
 ```bash
 make detector-image    # construye la imagen del detector LOCAL: sin push, sin Azure
-make deploy            # infra + app en la VM + contenedor del detector (creado APAGADO)
+make deploy            # gobernanza + infra + app en la VM + detector (creado APAGADO)
 make detector-start    # detector ON  — 1 réplica: levanta en segundos
 make deploy-status     # IP, web, VM, réplicas del detector y salud de sus revisiones
 make detector-stop     # detector OFF — 0 réplicas: el contenedor deja de cobrar
-make deploy-down       # terraform destroy de todo (lo único que deja el gasto en $0)
+make deploy-down       # destruye todo lo que COBRA (lo único que deja el gasto en $0)
 ```
 
 `make deploy` hace, en orden:
@@ -299,28 +312,67 @@ make deploy-down       # terraform destroy de todo (lo único que deja el gasto 
    anónimamente — si el repo es privado la VM arranca vacía, y si no pusheaste
    despliega código viejo, en ambos casos con el `apply` en verde).
 2. **Guard del kill-switch**: aborta si el kill-switch disparó (ver abajo).
-3. Genera `infra/terraform.tfvars` (email del presupuesto, llave SSH — la crea si
-   no existe, `repo_url` derivado de tu `origin`). Se escribe **una sola vez**.
+3. Genera los **dos** tfvars, cada uno una sola vez:
+   `infra/governance/terraform.tfvars` (email del presupuesto, montos, `enable_killswitch`) e
+   `infra/terraform.tfvars` (llave SSH — la crea si no existe, `repo_url` derivado de tu
+   `origin`, `detector_running`).
 4. Genera `infra/detector.auto.tfvars` con la calibración leída de
    `env/env.prod.example`, la **fuente única de verdad** compartida con el overlay del
    metaverso. Si cambió la ventana, **avisa** (el checkpoint viejo es incompatible).
-5. `terraform apply` en `infra/` — **una sola etapa**. El apply también **construye la
-   imagen** del detector con el podman del host y la **empuja** al registro (~4 min de build
-   + ~450 MB de push la primera vez; después solo las capas que cambian) y crea la Container
-   App **apagada** (`min_replicas = 0`).
-6. Escribe `.env.azure` (perfil listo para correr el detector/metaverso local
+5. **`terraform apply` en `infra/governance/`**: los seis resource groups, el presupuesto y
+   el kill-switch. La primera vez los crea; después es un **no-op de segundos** (por eso se
+   aplica siempre, sin olfatear el state para adivinar si "ya está").
+6. **`terraform apply` en `infra/`**: el workload. Busca los seis grupos con `data`,
+   **construye la imagen** del detector con el podman del host y la **empuja** al registro
+   (~4 min de build + ~450 MB de push la primera vez; después solo las capas que cambian) y
+   crea la Container App **apagada** (`min_replicas = 0`).
+7. Escribe `.env.azure` (perfil listo para correr el detector/metaverso local
    contra Azure: `cp .env.azure .env`).
-7. Espera a que cloud-init termine y la web responda 200 (~5 min).
+8. Espera a que cloud-init termine y la web responda 200 (~5 min).
 
 Variables opcionales: `BUDGET_EMAIL`, `SSH_PUBLIC_KEY_FILE`, `ENABLE_ARCHIVE=true`
 (archiva el histórico de posiciones en ADLS — ojo: si ese stream falla, se cae el detector
 con él, porque comparte `awaitAnyTermination()` con el de zonas rojas).
 
-### Una sola etapa de Terraform
+### Dos states: el guardián sobrevive a lo que guarda
 
-Todo el stack vive en **un único módulo raíz** (`infra/`): un solo `state`, un solo `apply`, un
-solo `destroy`. Ningún provider necesita configurarse con un valor que se cree en el mismo apply,
-que es lo único que obligaría a partirlo en dos.
+El stack vive en **dos módulos raíz**, con **dos states**:
+
+| Módulo | Qué tiene | Ciclo de vida | Costo |
+|---|---|---|---|
+| `infra/governance/` | Los **seis resource groups**, el **presupuesto** con sus cuatro notificaciones, el **action group** y el **kill-switch** (Automation Account + runbook + webhook + el rol custom y sus dos asignaciones) | Se aplica **una vez**. `make deploy-down` **no lo toca** | **$0** |
+| `infra/` | **Todo lo que cobra por hora**: la red, la VM, Event Hubs, ADLS, el registro, el entorno de Container Apps y el detector | **Efímero**: se crea y se destruye en cada demo | Lo de la tabla de arriba |
+
+**Por qué dos y no uno.** Si el presupuesto y el kill-switch compartieran state con la VM y
+el detector, `make deploy-down` correría un solo `terraform destroy` que se llevaría puesto
+**al guardián junto con lo guardado**. Y no sería solo feo: una suscripción de estudiante
+permite **una sola Automation Account por región**, borrarla **retiene el cupo durante horas**
+—de forma invisible: `az automation account list` no devuelve nada mientras Azure sigue
+rechazando la creación con un 400— y **`eastus2` es la única región legal** para ese recurso.
+Un `deploy-down` seguido de un `deploy` el mismo día se quedaría **sin poder recrear el
+kill-switch**, por más que quisiera.
+
+**Una Automation Account que nunca se borra nunca choca contra ese muro.** Por eso el
+guardián se aplica una vez y se queda. El workload va y viene.
+
+**Los resource groups van con la gobernanza** por la misma razón, y no es casual: son
+**gratis**, y las asignaciones de rol del kill-switch están *scopeadas* **a los grupos**
+(`rg-app` y `rg-analytics`). Si los grupos se fueran con el workload, ese permiso de cuatro
+acciones habría que rehacerlo en cada deploy — o ensancharlo a toda la suscripción, que es
+justamente el trade que el diseño se niega a hacer.
+
+**Lo que vas a ver en el portal después de un `make deploy-down`:** los seis resource groups
+**vacíos**, el presupuesto y el kill-switch. Todo eso **cuesta $0**. No es basura: es la red
+de seguridad, esperando al próximo deploy.
+
+**Cómo se hablan los dos states:** no se hablan. El workload no lee el state de la
+gobernanza: **busca los grupos por nombre** (`data "azurerm_resource_group"`), y los nombres
+son deterministas a partir de `project_name`. Si aplicás `infra/` sin haber aplicado la
+gobernanza, falla limpio con *"Resource Group not found"* **antes de crear nada**.
+
+Y el kill-switch tampoco recibe identificadores del workload: le decimos **en qué dos
+resource groups mirar** —que son suyos— y **descubre en tiempo de ejecución** lo que haya
+adentro (ver abajo). Ese es el otro extremo del mismo acoplamiento, cortado.
 
 ### El detector: encendido y apagado
 
@@ -411,6 +463,39 @@ que usa `make detector-stop`. Volvés con `make detector-start` y
 manda **únicamente** `properties.template.scale.minReplicas`: no puede tocar la imagen, los
 secretos ni el entorno de la app que está tratando de salvar.
 
+### Cómo encuentra sus blancos: le decimos DÓNDE mirar, no QUÉ va a encontrar
+
+El runbook vive en un state que **nunca se destruye**; la VM y el detector viven en uno que
+se destruye en cada demo. Así que el kill-switch **no puede tener anotado** el nombre de la
+VM ni el resource ID del detector: serían identificadores de recursos que ya no existen —
+y meterlos ahí volvería a atar la vida del guardián a la de lo guardado, que es exactamente
+el acoplamiento que este diseño corta.
+
+Lo que la gobernanza le pasa son **tres variables de Automation, todas propiedades suyas**:
+la suscripción y **dos resource groups que ella misma crea** (`SubscriptionId`,
+`VmResourceGroup`, `DetectorResourceGroup`). El runbook **lista esos dos grupos en tiempo de
+ejecución** y apaga lo que encuentre: nombrar los grupos no lo ata al workload, porque los
+grupos son de la gobernanza y sobreviven a todos los `deploy-down`.
+
+> ⚠️ **La alternativa obvia es una trampa, y la trampa es silenciosa.** Un
+> `Get-AzResource -Tag` a nivel suscripción se ve más elegante — y es
+> `GET /subscriptions/{id}/resources`, una lectura **de suscripción** que exige
+> `Microsoft.Resources/subscriptions/resources/read`. Esta identidad tiene **cuatro acciones,
+> asignadas en dos resource groups y en ningún lado más**. La consulta volvería **vacía por
+> falta de permisos** — y "vacío" se ve **idéntico** a "el workload no está desplegado". El
+> guardián reportaría éxito, no cortaría nada, y dejaría la factura corriendo el único día
+> que importaba. Listar **un tipo de recurso dentro de un grupo** solo necesita el `read` de
+> ese tipo, que es justo lo que el rol concede.
+
+**Si no encuentra nada, sale con éxito.** Cero recursos en grupos que existen significa que
+el workload está destruido, que no hay nada cobrando por hora, y por lo tanto que el
+kill-switch **no tiene nada que hacer**. Un guardián que tira error cuando no hay nada que
+matar es un guardián que la gente aprende a ignorar.
+
+**Pero si una consulta FALLA, truena.** El runbook sale con código distinto de cero y el job
+de Automation queda en `Failed`. La diferencia importa: "no encontré nada" y "no pude
+fijarme" **no son lo mismo**, y confundirlos es como se construye una alarma que miente.
+
 ### Permisos: un rol custom de CUATRO acciones, no `Contributor`
 
 `Contributor` sobre el resource group era la respuesta fácil y la equivocada.
@@ -432,6 +517,16 @@ Microsoft.App/containerApps/write
 un `PATCH` es una escritura. Lo que sí compra el scoping es que el radio de explosión termina
 en la Container App: el registro, el entorno y Log Analytics quedan fuera de alcance.)
 
+Las asignaciones siguen *scopeadas* a **dos resource groups** (`rg-metaverso-app` y
+`rg-metaverso-analytics`), no a la suscripción — y eso funciona porque **los grupos los crea
+la gobernanza**, así que sobreviven a un `deploy-down` y el permiso no hay que rehacerlo en
+cada deploy.
+
+Las dos acciones de `read` son además lo que hace posible el descubrimiento: listar un tipo
+de recurso **dentro de un resource group** exige exactamente el `read` de ese tipo en ese
+grupo — que es lo que el rol concede. Por eso el runbook puede ver la VM y la Container App
+sin ningún permiso a nivel suscripción.
+
 ### El deploy se NIEGA a revertir un kill-switch que disparó
 
 El runbook escala a 0 réplicas **por afuera de Terraform**, pero el estado deseado sigue
@@ -450,7 +545,7 @@ persona, revisa cuánto gastó, y recién ahí decide encender de nuevo con `mak
 > **llegan con horas de retraso**: cuando el budget "vea" los $40, el gasto real puede
 > ser mayor. El freno de mano sigue siendo `make detector-stop` al terminar la demo.
 
-### Si el `apply` falla en el kill-switch: `enable_killswitch = false`
+### `enable_killswitch = false`: la red para el PRIMER apply
 
 Una suscripción de estudiante permite **una sola Automation Account por región**, y una
 cuenta **borrada retiene el cupo durante horas** — de forma **invisible**: `az automation
@@ -461,25 +556,32 @@ account list` no devuelve nada mientras Azure sigue rechazando la creación con
      If Deleted recently, please restore the same account"
 ```
 
-Como la única región legal es `eastus2` (ver abajo), **no hay a dónde escaparse**: un
-`deploy-down` seguido de un `deploy` el mismo día no puede crear el kill-switch.
+Como la única región legal es `eastus2` (ver abajo), **no hay a dónde escaparse**.
 
-Eso **no debe bloquear el despliegue entero** ni —sobre todo— llevarse puestas las alertas
-del budget. Por eso el kill-switch es opcional:
+**Un redespliegue no puede chocar contra esto.** La Automation Account vive en el state de la
+gobernanza, y `make deploy-down` no lo destruye: la cuenta no se borra nunca, así que nunca
+hay un cupo retenido que la bloquee. `make deploy` cuantas veces quieras, el mismo día, sin
+tocar el kill-switch.
+
+Queda **un solo** caso en el que el `apply` de la gobernanza puede fallar acá: el **primer**
+apply, si la suscripción todavía tiene reservado el cupo por una Automation Account que
+existió **fuera** de este state. Para eso está el flag:
 
 ```hcl
-# infra/terraform.tfvars
+# infra/governance/terraform.tfvars
 enable_killswitch = false
 ```
 
-Con esto en `false`, **el budget sigue avisando por email en todos los umbrales**; lo único
-que se pierde es el apagado automático. Cuando Azure libere el cupo, poné `true` y
-`make deploy` otra vez (agrega los recursos del kill-switch, no toca nada más).
+Con esto en `false`, **el budget sigue avisando por email en todos los umbrales** (y los seis
+resource groups se crean igual, así que el workload despliega normal); lo único que se pierde
+es el apagado automático. Cuando Azure libere el cupo, poné `true` y `make deploy` otra vez:
+agrega los recursos del kill-switch y **no toca nada más** — ni el workload se entera.
 
-> El diseño anterior tenía el bug al revés: la notificación del 100% referenciaba el action
-> group, así que si la Automation Account fallaba **se caía el budget completo** — incluidos
-> los tres avisos por email que no la necesitan. Un guardián de costos que puede bloquear su
-> propio despliegue no es un guardián.
+> Ojo con el otro bug que este flag evita: la notificación del 100% del budget referencia al
+> action group **solo si el kill-switch existe**. Si lo referenciara siempre, una Automation
+> Account que no se puede crear **se llevaría puesto al budget entero** — incluidos los tres
+> avisos por email que no la necesitan. Un guardián de costos que puede bloquear su propio
+> despliegue no es un guardián.
 
 ### La región del kill-switch: dos listas, una sola intersección
 
@@ -499,9 +601,10 @@ región**, y borrarla **no libera el cupo enseguida** (`"If Deleted recently, pl
 the same account"`). La tentación es mover la cuenta a otra región para no gastar el cupo de
 la principal — **no se puede**: no hay otra región legal.
 
-Consecuencia práctica: un `deploy-down` seguido de un `deploy` inmediato puede fallar acá,
-en el último recurso, con todo lo demás ya creado. Si pasa, esperá a que Azure libere el
-cupo (horas) o desplegá con `enable_killswitch = false` y volvé a activarlo después.
+**Consecuencia práctica: no la borres.** Es el motivo por el que la Automation Account vive
+en el state de la gobernanza, que `make deploy-down` no toca. La única forma de borrarla es
+pedirlo explícitamente (`make governance-down`), y ese comando **te avisa antes** de que muy
+probablemente te quedes sin poder recrear el kill-switch en lo que queda del día.
 
 ### Probalo ANTES de necesitarlo
 
@@ -528,7 +631,8 @@ importalos desde la galería en el Automation Account — es la única dependenc
 que tiene.
 
 Ajustar los montos: `budget_alert_amount` (aviso) y `budget_amount` (corte) en
-`infra/terraform.tfvars`.
+`infra/governance/terraform.tfvars`. Después: `terraform -chdir=infra/governance apply`
+(o un `make deploy`, que aplica la gobernanza primero).
 
 ## Prueba local con Floci (opcional, antes de gastar créditos)
 
@@ -549,12 +653,34 @@ esperado (se validan solo contra Azure real con `terraform plan`). El push de la
 detector tampoco tiene sentido contra el emulador — pero el **build** sí corre sin Azure de por
 medio: `make detector-image`.
 
-## Destruir todo
+## Destruir: qué se va y qué se queda
 
 ```bash
 make deploy-down
 ```
 
-`make deploy-down` borra **todo**, y no queda nada huérfano que limpiar a mano: cada recurso está
-declarado en `infra/` y se va con su resource group — incluido el registro con sus imágenes. El
-gasto queda en $0.
+**Destruye el workload: todo lo que cobra.** La VM, Event Hubs, ADLS, el registro (con sus
+imágenes), el entorno de Container Apps y el detector. No queda nada huérfano que limpiar a
+mano, y **el gasto queda en $0**.
+
+**Lo que NO se va, y es a propósito:**
+
+| Sobrevive | Por qué | Costo |
+|---|---|---|
+| El presupuesto y sus cuatro notificaciones | Una alarma de gasto que se apaga sola no es una alarma | $0 |
+| El kill-switch (Automation Account + runbook + webhook + rol) | Un guardián que se destruye con lo guardado no es un guardián — y borrar la cuenta te deja **horas** sin poder recrearla | $0 |
+| Los **seis resource groups**, ahora vacíos | Son gratis, y son el *scope* al que están atadas las asignaciones de rol del kill-switch | $0 |
+
+Los vas a ver en el portal, vacíos, y **está bien**. El próximo `make deploy` los reusa y solo
+recrea lo que cobra.
+
+Si de verdad querés borrar también al guardián — casi nunca es lo que querés:
+
+```bash
+make governance-down
+```
+
+Ese comando **pide confirmación escrita** y te recuerda lo que estás por perder: `eastus2` es
+la única región legal para la Automation Account, la suscripción permite **una sola por
+región**, y borrarla **retiene el cupo durante horas de forma invisible**. Traducido: es
+probable que hoy ya no puedas volver a crear el kill-switch.

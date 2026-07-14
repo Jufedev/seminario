@@ -31,7 +31,7 @@ GRID_ORIGIN_Y ?= -195
         kafka-install kafka-start kafka-stop kafka-status kafka-logs consume \
         detector \
         metaverse-install metaverse-test metaverse-server metaverse-web \
-        deploy detector-start detector-stop deploy-status deploy-down \
+        deploy detector-start detector-stop deploy-status deploy-down governance-down \
         detector-image \
         infra-init infra-plan infra-apply \
         docker-kafka-up docker-kafka-down clean
@@ -101,14 +101,22 @@ dev: ## Bring up the WHOLE local loop with one command (Kafka+detector+server+we
 	./scripts/dev-up.sh
 
 # --- Infrastructure (prod — Azure via Terraform) ----------------------------
-# deploy is the whole thing (infra + app on the VM + the detector container); the
-# infra-* targets are the escape hatch for driving Terraform by hand.
+# deploy is the whole thing (governance + infra + app on the VM + the detector container);
+# the infra-* targets are the escape hatch for driving Terraform by hand.
 #
-# ONE Terraform stage. The apply also BUILDS the detector image — locally, with the
-# HOST's podman (reached through distrobox-host-exec) — and pushes it, because the
-# Container App cannot reference an image that does not exist yet. See infra/detector.tf.
+# TWO root modules, TWO states:
+#
+#   infra/governance/  the budget, the kill-switch and the six resource groups. Applied
+#                      once, and `deploy-down` does NOT destroy it — a cost guard that dies
+#                      with the thing it guards is not a guard.
+#   infra/            the workload: everything that BILLS. This is what `deploy-down`
+#                      destroys, and what the infra-* targets below drive.
+#
+# The workload apply also BUILDS the detector image — locally, with the HOST's podman
+# (reached through distrobox-host-exec) — and pushes it, because the Container App cannot
+# reference an image that does not exist yet. See infra/detector.tf.
 
-deploy: ## Deploy EVERYTHING to Azure (infra + app VM + the detector container)
+deploy: ## Deploy EVERYTHING to Azure (governance + infra + app VM + the detector container)
 	./scripts/deploy-azure.sh up
 
 # Build the image WITHOUT pushing it or touching Azure. This is what building locally
@@ -126,20 +134,31 @@ detector-stop: ## Turn the Azure detector OFF (0 replicas). NOT $0 for the deplo
 deploy-status: ## Show the Azure deployment status (web, VM, detector)
 	./scripts/deploy-azure.sh status
 
-deploy-down: ## Destroy the whole Azure deployment
+deploy-down: ## Destroy everything that BILLS (the workload). $0. The budget and the kill-switch survive on purpose — they cost nothing and they must outlive what they guard
 	./scripts/deploy-azure.sh down
 
-infra-init: ## terraform init (needs ARM_SUBSCRIPTION_ID)
+# The rare, explicit one. `deploy-down` never calls it, and it asks for a typed confirmation:
+# deleting the Automation Account retains the subscription's one-per-region quota slot for
+# HOURS, and eastus2 is the only region where it may legally live — so this can leave you
+# unable to recreate the kill-switch today. There is no reason to run it after a demo:
+# governance costs $0.
+governance-down: ## Destroy the GUARD (budget + kill-switch + the resource groups). Rare and explicit — deploy-down is what you want after a demo
+	./scripts/deploy-azure.sh governance-down
+
+# The infra-* targets drive the WORKLOAD module by hand (infra/). The governance module is
+# not wired to a target of its own: it is applied by `make deploy`, and it is not something
+# anyone should be tweaking between demos.
+infra-init: ## terraform init on the workload module (needs ARM_SUBSCRIPTION_ID)
 	cd infra && terraform init
 
-infra-plan: ## terraform plan
+infra-plan: ## terraform plan on the workload module (needs governance applied: it looks the resource groups up)
 	cd infra && terraform plan
 
 # The guard runs FIRST and can abort the apply. If the budget kill-switch has fired, it
 # scaled the detector to 0 replicas OUTSIDE Terraform — and a plain `terraform apply`
 # would happily converge that back to the declared `detector_running = true`, silently
 # switching the billing back on. The escape hatch must not be a way around the safety net.
-infra-apply: ## terraform apply (Event Hubs + ADLS + the VM + the detector container)
+infra-apply: ## terraform apply on the workload (Event Hubs + ADLS + the VM + the detector container)
 	./scripts/deploy-azure.sh guard
 	cd infra && terraform apply
 

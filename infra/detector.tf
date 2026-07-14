@@ -128,8 +128,8 @@ locals {
 # meaning.
 resource "azurerm_container_registry" "detector" {
   name                = "cr${var.project_name}${random_string.suffix.result}"
-  location            = azurerm_resource_group.analytics.location
-  resource_group_name = azurerm_resource_group.analytics.name
+  location            = data.azurerm_resource_group.analytics.location
+  resource_group_name = data.azurerm_resource_group.analytics.name
   sku                 = "Basic"
   # No admin user: the Container App pulls with a managed identity, so there is
   # no registry password to leak into the Terraform state or into anyone's shell.
@@ -196,8 +196,8 @@ resource "terraform_data" "detector_image" {
 # no chicken-and-egg.
 resource "azurerm_user_assigned_identity" "detector" {
   name                = "id-${var.project_name}-detector"
-  location            = azurerm_resource_group.analytics.location
-  resource_group_name = azurerm_resource_group.analytics.name
+  location            = data.azurerm_resource_group.analytics.location
+  resource_group_name = data.azurerm_resource_group.analytics.name
   tags                = merge(local.tags, { proposito = "Identidad con la que el detector baja su imagen del registro (sin usuario ni contrasena)" })
 }
 
@@ -213,8 +213,8 @@ resource "azurerm_role_assignment" "detector_acr_pull" {
 # inside the 5 GiB/month free allowance.
 resource "azurerm_log_analytics_workspace" "detector" {
   name                = "log-${var.project_name}-detector"
-  location            = azurerm_resource_group.analytics.location
-  resource_group_name = azurerm_resource_group.analytics.name
+  location            = data.azurerm_resource_group.analytics.location
+  resource_group_name = data.azurerm_resource_group.analytics.name
   sku                 = "PerGB2018"
   retention_in_days   = 30
   tags                = merge(local.tags, { proposito = "Logs del detector: es la unica ventana a lo que hace la consulta de streaming" })
@@ -224,8 +224,8 @@ resource "azurerm_log_analytics_workspace" "detector" {
 
 resource "azurerm_container_app_environment" "detector" {
   name                       = "cae-${var.project_name}"
-  location                   = azurerm_resource_group.analytics.location
-  resource_group_name        = azurerm_resource_group.analytics.name
+  location                   = data.azurerm_resource_group.analytics.location
+  resource_group_name        = data.azurerm_resource_group.analytics.name
   log_analytics_workspace_id = azurerm_log_analytics_workspace.detector.id
   tags                       = merge(local.tags, { proposito = "Entorno serverless donde corre el contenedor del detector" })
 }
@@ -233,11 +233,15 @@ resource "azurerm_container_app_environment" "detector" {
 resource "azurerm_container_app" "detector" {
   name                         = "ca-${var.project_name}-detector"
   container_app_environment_id = azurerm_container_app_environment.detector.id
-  resource_group_name          = azurerm_resource_group.analytics.name
+  resource_group_name          = data.azurerm_resource_group.analytics.name
   # Single: one revision serves at a time. There is nothing to blue/green — a
   # streaming detector with two revisions alive would double-emit red points.
   revision_mode = "Single"
-  tags          = merge(local.tags, { proposito = "El detector de zonas rojas: Spark Structured Streaming, prendido/apagado con min_replicas" })
+  # What makes this app reachable by the kill-switch is the resource group it lives in, not
+  # its tags: the runbook lists rg-<project>-analytics and scales whatever it finds to zero
+  # (governance/killswitch.ps1 explains why a tag query would fail silently). Move this app
+  # to another group and the guard stops seeing it.
+  tags = merge(local.tags, { proposito = "El detector de zonas rojas: Spark Structured Streaming, prendido/apagado con min_replicas" })
 
   identity {
     type         = "UserAssigned"

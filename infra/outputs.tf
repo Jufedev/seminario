@@ -48,7 +48,7 @@ output "detector_running" {
 
 output "detector_resource_group" {
   description = "Resource group holding the detector Container App (used by the status command to fetch its logs)"
-  value       = azurerm_resource_group.analytics.name
+  value       = data.azurerm_resource_group.analytics.name
 }
 
 output "detector_checkpoint" {

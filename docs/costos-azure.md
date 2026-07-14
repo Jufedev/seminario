@@ -149,7 +149,7 @@ que ser **`make deploy-down`**, no `detector-stop`.
 
 ### Los umbrales del budget, en horas
 
-El presupuesto de `infra/` avisa a los $10 y a los $30, y el kill-switch corta a los $40.
+El presupuesto de `infra/governance/` avisa a los $10 y a los $30, y el kill-switch corta a los $40.
 Traducido a tiempo real, con el stack desplegado y la VM encendida ($0.177/h):
 
 | Umbral | Cuándo lo tocás |

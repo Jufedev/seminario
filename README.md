@@ -121,9 +121,19 @@ JS→Spark). Ninguno de los dos necesita Kafka.
 
 El mismo código corre contra Azure sin cambiar una línea: Event Hubs expone el
 protocolo Kafka, así que el detector y el metaverso solo cambian de
-`KAFKA_BOOTSTRAP` + `EVENTHUBS_CONNECTION_STRING`. `infra/` provisiona —en **una
-sola etapa de Terraform**— la red, la VM que sirve el metaverso, Event Hubs, ADLS
-y el contenedor del detector (registro de imágenes + Azure Container Apps).
+`KAFKA_BOOTSTRAP` + `EVENTHUBS_CONNECTION_STRING`. `infra/` provisiona la red, la VM
+que sirve el metaverso, Event Hubs, ADLS y el contenedor del detector (registro de
+imágenes + Azure Container Apps).
+
+**Terraform está partido en dos módulos raíz, con dos states**, y el motivo es el gasto:
+
+| Módulo | Qué tiene | Ciclo de vida |
+|---|---|---|
+| `infra/governance/` | El presupuesto, el kill-switch y los seis resource groups (gratis) | Se aplica **una vez**. `make deploy-down` **no lo destruye** |
+| `infra/` | **Todo lo que cobra**: VM, Event Hubs, ADLS, registro, Container Apps | **Efímero**: se destruye después de cada demo |
+
+Un guardián de costos que se destruye junto con lo que guarda no es un guardián. El
+detalle está en [`infra/README.md`](infra/README.md#dos-states-el-guardián-sobrevive-a-lo-que-guarda).
 
 ### Antes de desplegar (una sola vez)
 
@@ -149,9 +159,10 @@ Un solo comando cubre todo el ciclo, sin checklists manuales:
 |---|---|
 | Preflight | Sesión de Azure, repo público, HEAD pusheado |
 | Guard del kill-switch | Aborta si el kill-switch del presupuesto disparó (un apply lo revertiría) |
-| `infra/terraform.tfvars` | Lo genera (email del presupuesto + llave SSH — la crea si no existe) |
+| Los dos `terraform.tfvars` | Los genera: `infra/governance/` (email y montos del presupuesto) e `infra/` (llave SSH — la crea si no existe) |
 | `infra/detector.auto.tfvars` | Calibración del detector, leída de `env/env.prod.example` |
-| `terraform apply` | Red, VM, Event Hubs, ADLS, registro + **imagen del detector** (build local con podman → push al registro) + Container App **apagada**, presupuesto y kill-switch |
+| `apply` de la **gobernanza** | Los seis resource groups, el presupuesto y el kill-switch. La primera vez los crea; después es un no-op de segundos |
+| `apply` del **workload** | Red, VM, Event Hubs, ADLS, registro + **imagen del detector** (build local con podman → push al registro) + Container App **apagada** |
 | `.env.azure` | Perfil listo para correr el detector/metaverso local contra Azure |
 | Espera | Hasta que cloud-init termine y la web responda (~5 min) |
 
@@ -173,7 +184,7 @@ Event Hubs ($0.030/h), el registro ($5/mes), la IP pública ($0.005/h) y el disc
 
 ```bash
 ./scripts/deploy-azure.sh vm-stop   # desasigna la VM (lo más caro que queda PRENDIDO)
-make deploy-down                    # destruye TODO — lo único que deja el gasto en $0
+make deploy-down                    # destruye todo lo que cobra — lo único que deja el gasto en $0
 ```
 
 > Ojo: después de `vm-stop` **seguís pagando $0.044/h** (~$32/mes), y ahí el mayor
@@ -191,16 +202,27 @@ del contenedor traen el banner de arranque.
 > Sin el detector corriendo no hay zonas rojas — igual que en dev: la detección
 > vive en el Big Data.
 
-### Destruir todo
+### Destruir: qué se va y qué se queda
 
 ```bash
 make deploy-down
 ```
 
+Destruye **todo lo que cobra** — la VM, Event Hubs, ADLS, el registro y el detector — y el
+gasto queda en **$0**. Lo que **sobrevive a propósito**: el presupuesto, el kill-switch y los
+seis resource groups, ahora **vacíos**. Los vas a ver en el portal, y no son basura: es la
+red de seguridad, que **cuesta $0** y tiene que seguir en pie cuando el despliegue no está.
+Un guardián que se destruye junto con lo que guarda no es un guardián.
+
+Borrar también al guardián es un comando aparte y explícito (`make governance-down`), y
+**casi nunca es lo que querés**: la Automation Account del kill-switch solo puede vivir en
+`eastus2`, la suscripción permite una sola por región, y borrarla retiene el cupo durante
+**horas** — te quedarías sin poder recrearla en lo que queda del día.
+
 Detalle de recursos, costos por recurso e internals (por qué la imagen se construye
 **localmente con el podman del host** y no dentro de Azure, dónde vive el checkpoint de
-Spark, los límites de Azure for Students, el kill-switch del presupuesto):
-[`infra/README.md`](infra/README.md).
+Spark, los límites de Azure for Students, el kill-switch del presupuesto y por qué son dos
+states): [`infra/README.md`](infra/README.md).
 
 > `make detector-image` construye la imagen del detector **sin tocar Azure** (sin push, sin
 > sesión, sin registro). Sirve para probarla antes de desplegar.
