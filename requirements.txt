@@ -1,5 +1,5 @@
 # Python side is ONLY the Spark red-point detector (pipeline/red_point_detector.py).
-# It talks to Kafka through Spark's built-in connector (spark.jars.packages),
-# so no Python Kafka client is needed. The old WebSocket bridge and the
-# synthetic simulators were removed — the metaverse is now the real data source.
+# It talks to Kafka through Spark's built-in connector (spark.jars.packages), so no
+# Python Kafka client is needed here. The metaverse — not a synthetic simulator — is
+# the data source, and its Node server produces to Kafka natively.
 pyspark==3.5.1

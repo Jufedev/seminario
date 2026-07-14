@@ -1,35 +1,31 @@
 # The Spark red-point detector, running as a container on Azure Container Apps.
 #
-# WHY it is not Databricks any more (v1 was):
+# WHY a container and not a cluster:
 #
-#   The v1 job cluster ran with `num_workers = 0` and `spark.master = "local[*, 4]"`.
-#   The detector was ALWAYS a single JVM in Spark local mode — it never used a
-#   cluster. Databricks was an expensive, capacity-bound wrapper around one Python
-#   process, and on 2026-07-13 the deployment died on
-#   CLOUD_PROVIDER_RESOURCE_STOCKOUT: Standard_D4s_v3 (the only 4-vCPU SKU an Azure
-#   for Students subscription can use in eastus2 — every other one is
-#   Location-restricted) was out of stock. There was no fallback SKU to move to.
+#   A Spark cluster spreads work across machines, and that only pays for itself when
+#   there is something to spread. This pipeline carries one sample per avatar per
+#   second — a hundred avatars is a hundred JSON messages a second, which one core
+#   handles comfortably. So the detector is a SINGLE JVM in Spark local mode: it never
+#   distributes a task. A cluster would add coordination, not capacity.
 #
-# What the move buys, beyond "it deploys at all":
+# What running it on Container Apps buys:
 #
-#   * No VM SKU to be out of stock. Container Apps Consumption is serverless.
-#   * The NAT gateway is gone. The Databricks workspace created one and it billed
-#     ~$0.045/h for as long as the WORKSPACE existed — cluster running or not.
-#   * rg-metaverso-databricks-managed is gone. Databricks created that resource
-#     group itself, `terraform destroy` never deleted it, and its leftovers
-#     (DBFS storage + Unity Catalog connector) blocked the next deploy.
-#   * min_replicas is the on/off switch and the container starts in SECONDS,
-#     against the ~5 minutes a Databricks job cluster took to boot.
+#   * No VM SKU that can be out of stock. Consumption is serverless — and on an Azure
+#     for Students subscription that matters: in eastus2 nearly every 4-vCPU SKU is
+#     Location-restricted, so a big compute node would have one possible size and no
+#     fallback.
+#   * min_replicas is the on/off switch and the container starts in SECONDS.
+#   * Nothing bills while it is off: 0 replicas = no process = no meter.
 #   * Consumption pricing gives 180k vCPU-s + 360k GiB-s free per month, which at
 #     2 vCPU covers ~25 h of detector uptime before it bills anything at all.
 #
-# What does NOT change: the image runs pipeline/red_point_detector.py unmodified.
-# It is still Apache Spark Structured Streaming.
+# The image runs pipeline/red_point_detector.py unmodified: this is still Apache Spark
+# Structured Streaming — same windows, same watermark, same checkpoint, same engine.
 
 locals {
   # Container Apps sizing. Consumption requires memory = 2 GiB per vCPU, so
-  # 2 vCPU pairs with exactly 4Gi. That is more headroom than the single-node
-  # Databricks driver effectively used.
+  # 2 vCPU pairs with exactly 4Gi — comfortable headroom for a single-node
+  # stateful streaming query.
   detector_cpu    = 2.0
   detector_memory = "4Gi"
 
@@ -65,14 +61,14 @@ locals {
   # ATOMIC RENAME. That is not a nice-to-have for Spark checkpointing — it is the
   # primitive the commit protocol is built on, and flat blob storage cannot provide it.
   #
-  # THE CONSEQUENCE, and it is the v1 semantics coming back: the checkpoint now holds
+  # THE CONSEQUENCE: the checkpoint holds
   # the Event Hubs offsets and the aggregation state, so changing WINDOW_DURATION,
   # WINDOW_SLIDE or the aggregation in prod needs a checkpoint MIGRATION, not a delete.
   # `make clean` is a dev-only move. docs/integration-contract.md already says this.
   # var.checkpoint_dir_override is the escape hatch, and it exists because the ABFS
   # shared-key write is the one thing in the detector's STARTUP path that has never
   # been executed against a real HNS account. If it fails, the detector does not start
-  # at all — a worse failure than the ephemeral checkpoint this replaced. Overriding to
+  # at all — a worse failure than losing the state on a restart. Overriding to
   # a container-local path (e.g. /tmp/checkpoints/red-point-detector) trades restart
   # resilience back for a detector that is guaranteed to boot. That is a trade worth
   # having available with a demo in front of a jury, and worth making in ONE flag
@@ -94,11 +90,11 @@ locals {
   # Exactly the env vars pipeline/red_point_detector.py reads. The Event Hubs
   # connection string is NOT here: it is a Container Apps secret (see below).
   #
-  # Unlike Databricks, Container Apps hands these to the process directly — no
-  # `export KEY=VALUE` bash script in between. So the v1 quoting trap is gone: the
-  # `;` in the connection string cannot truncate it any more, and "10 seconds"
-  # cannot split into two words. Values go in raw. (The detector's quote-tolerant
-  # env() helper still works and is harmless.)
+  # Container Apps hands these to the process directly — no `export KEY=VALUE` bash
+  # script in between — so no shell quoting trap: the `;` in the connection string
+  # cannot truncate it, and "10 seconds" cannot split into two words. Values go in
+  # raw. (The detector's quote-tolerant env() helper covers the case where these
+  # values ever DO come through a shell; here it is a harmless no-op.)
   detector_env = {
     KAFKA_BOOTSTRAP = "${azurerm_eventhub_namespace.main.name}.servicebus.windows.net:9093"
     INPUT_TOPIC     = azurerm_eventhub.avatar_positions.name
@@ -155,18 +151,13 @@ resource "azurerm_container_registry" "detector" {
 # because it would try to create the Container App with no image behind it.
 #
 # The build itself runs LOCALLY (scripts/build-detector-image.sh: podman build, then
-# push to the registry). It used to be `az acr build`, which uploaded the context and
-# built it inside Azure, and the justification was "there is no Docker or Podman on the
-# dev box".
-#
-# That justification was FALSE, and instructively so: this project's distrobox is itself
-# run by the HOST's Podman. The engine was always there, one hop away — the box just
-# could not see it. The script reaches it with distrobox-host-exec.
+# push to the registry). The engine is the HOST's Podman — the same one that runs this
+# project's distrobox — and the script reaches it with distrobox-host-exec.
 #
 # Building here means the image can be run and smoke-tested before it ever reaches Azure
-# (`make detector-image`), and the build stops depending on an Azure-side build agent.
-# The cost, stated plainly: the first push sends ~450 MB from this machine instead of a
-# ~20 KB context. Later pushes only send the layers the registry does not have.
+# (`make detector-image`), and the build does not depend on an Azure-side build agent.
+# The cost, stated plainly: the heavy lifting happens on this machine, so the first push
+# sends ~450 MB from here. Later pushes only send the layers the registry does not have.
 #
 # NOT podman inside the box: rootless Podman-in-Podman has no overlay-on-overlay and
 # falls back to the `vfs` storage driver, which copies the entire filesystem per layer.
@@ -218,8 +209,8 @@ resource "azurerm_role_assignment" "detector_acr_pull" {
 
 # --- Logs ------------------------------------------------------------------
 # Container Apps needs a log destination or the detector's stdout goes nowhere,
-# and stdout is the only window into a streaming query (v1 had the Databricks
-# driver log). Ingest at this volume sits inside the 5 GiB/month free allowance.
+# and stdout is the ONLY window into a streaming query. Ingest at this volume sits
+# inside the 5 GiB/month free allowance.
 resource "azurerm_log_analytics_workspace" "detector" {
   name                = "log-${var.project_name}-detector"
   location            = azurerm_resource_group.analytics.location
@@ -274,10 +265,9 @@ resource "azurerm_container_app" "detector" {
 
   template {
     # THE DEMO SWITCH. 0 replicas = no container = $0/hour; 1 = the detector is
-    # running. It replaces v1's `detector_running` Databricks pause flag, and the
-    # container is up in seconds instead of the ~5 minutes a job cluster needed
-    # to boot. max_replicas is 1 because the query is stateful and single-node:
-    # a second replica would be a second detector emitting the same red points.
+    # running, and it is up in SECONDS. max_replicas is 1 because the query is
+    # stateful and single-node: a second replica would be a second detector
+    # emitting the same red points.
     min_replicas = var.detector_running ? 1 : 0
     max_replicas = 1
 

@@ -114,7 +114,7 @@ export class Simulation {
       return true
     }
 
-    // La caché de rutas evita las zonas rojas de SPARK (ya no las de ZoneSystem).
+    // La caché de rutas evita las zonas rojas de SPARK: la detección vive en el Big Data.
     this._installSparkRedChecker()
   }
 

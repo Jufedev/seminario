@@ -6,7 +6,7 @@
 //    (admin sin code → crea sala nueva; con code → se une a esa)
 //  Protocolo saliente:  room_joined | room_state | join_error
 //                       + sim_info | world_snapshot (por sala)
-//  Arrancar con: npm run server
+//  Arrancar con: make metaverse-server
 // ════════════════════════════════════════════════════════════════
 import { WebSocketServer } from 'ws'
 import { RoomManager } from './rooms.js'

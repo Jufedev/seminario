@@ -8,17 +8,12 @@
 #   ./scripts/deploy-azure.sh status  # IP, web, estado del detector, VM
 #   ./scripts/deploy-azure.sh down    # destruye TODO
 #
-# Terraform en UNA sola etapa (infra/). En v1 eran dos, y por un único motivo: el
-# provider `databricks` necesitaba la URL de un workspace que se creaba en ese mismo
-# apply, y un provider no puede configurarse con algo que todavía no existe. Sin
-# Databricks ese motivo desapareció.
+# Terraform en UNA sola etapa (infra/): un solo módulo raíz, un solo state, un solo apply.
 #
 # La imagen del detector se construye ACÁ, con el podman del HOST (se lo alcanza con
 # distrobox-host-exec), y se empuja al registro: scripts/build-detector-image.sh.
-#
-# Antes se construía con `az acr build`, o sea DENTRO de Azure, y el motivo declarado era
-# "en esta caja no hay Docker ni Podman". Era falso: esta distrobox la corre el podman del
-# host. El motor siempre estuvo ahí, a un salto — la caja no lo veía.
+# Podman vive en el host porque es el motor que corre esta distrobox; instalarlo DENTRO
+# de la caja caería al driver vfs (copia el filesystem entero por capa).
 #
 # Lo que construir local nos da: la imagen se puede CORRER y probar antes de que toque
 # Azure (`make detector-image`). Lo que cuesta: el primer push manda ~450 MB desde acá.
@@ -437,9 +432,10 @@ El detector está apagado. Para la demo:
   make deploy-status       # ver que todo esté arriba
   make detector-stop       # detector OFF — apagalo apenas termine la demo
 
-${bold}Lo que YA está cobrando, con el detector apagado:${off} la VM (~\$0.126/h),
-Event Hubs (~\$0.015/h), el registro (Basic, ~\$5/mes fijo) y Log Analytics.
-Son ~\$0.15/hora ≈ \$3.4/día. Sobre un presupuesto de estudiante, eso importa:
+${bold}Lo que YA está cobrando, con el detector apagado:${off} la VM (\$0.133/h),
+Event Hubs (\$0.030/h), el registro (Basic, \$5/mes fijo), la IP pública (\$0.005/h)
+y el disco. Son \$0.177/hora ≈ \$4.25/día — con el stack ocioso, \$100 de crédito
+duran 23 días. Sobre un presupuesto de estudiante, eso importa:
 
   ./scripts/deploy-azure.sh vm-stop    # desasigna la VM (lo más caro)
   make deploy-down                     # destruye TODO (lo único que deja el gasto en \$0)
@@ -483,22 +479,24 @@ cmd_stop() {
   AUTO=1 tf_apply
 
   # Nada de "costo $0". `min_replicas = 0` apaga el CONTENEDOR, no el despliegue: la VM,
-  # Event Hubs, el registro y Log Analytics siguen cobrando. Decir "$0" cuando en
-  # realidad son ~$0.15/h es exactamente así como se evapora el crédito sin que nadie
+  # Event Hubs, el registro, la IP pública y el disco siguen cobrando. Decir "$0" cuando
+  # en realidad son $0.177/h es exactamente así como se evapora el crédito sin que nadie
   # se dé cuenta.
   ok "Detector OFF: el contenedor deja de cobrar (0 réplicas)."
   cat <<EOF
 
   ${yellow}Ojo: esto NO deja el gasto en \$0.${off} Sigue cobrando:
 
-    VM              ~\$0.126/h   <- lo más caro que queda prendido
-    Event Hubs      ~\$0.015/h
-    Registro (ACR)  ~\$5/mes fijo
+    VM              \$0.133/h    <- lo más caro que queda PRENDIDO
+    Event Hubs      \$0.030/h    <- se paga por estar reservado, haya tráfico o no
+    Registro (ACR)  \$5/mes fijo
+    IP pública      \$0.005/h    <- cobra TAMBIÉN con la VM desasignada
+    Disco de SO     \$0.002/h    <- cobra TAMBIÉN con la VM desasignada
     Log Analytics   por ingesta (poco a este volumen)
 
-  Total ≈ \$0.15/hora ≈ \$3.4/día.
+  Total \$0.177/hora ≈ \$4.25/día. Con el stack ocioso, \$100 duran 23 días.
 
-    ./scripts/deploy-azure.sh vm-stop    # desasigna la VM: baja a ~\$0.02/h
+    ./scripts/deploy-azure.sh vm-stop    # desasigna la VM: baja a \$0.044/h (~\$32/mes)
     make deploy-down                     # destruye TODO: recién ahí es \$0
 
 EOF
@@ -554,9 +552,10 @@ cmd_status() {
   "RED-POINT DETECTOR — CONTAINER START": si aparece más de una vez, el contenedor
   se reinició.
 
-  ${bold}Lo que está cobrando ahora mismo:${off} la VM (~\$0.126/h, si está running),
-  Event Hubs (~\$0.015/h), el registro (~\$5/mes) y — solo si min_replicas=1 — el
-  detector. Apagar el detector NO deja el gasto en \$0: eso lo hace \`make deploy-down\`.
+  ${bold}Lo que está cobrando ahora mismo:${off} la VM (\$0.133/h, si está running),
+  Event Hubs (\$0.030/h), el registro (\$5/mes), la IP pública (\$0.005/h), el disco
+  y — solo si min_replicas=1 — el detector. Apagar el detector NO deja el gasto en
+  \$0: eso lo hace \`make deploy-down\`.
 
 EOF
 }
@@ -579,9 +578,8 @@ cmd_down() {
   terraform -chdir="$INFRA" destroy $(apply_args)
   rm -f "$ENV_OUT"
 
-  # Sin Databricks no queda nada huérfano que limpiar: el registro y sus imágenes se van
-  # con el resource group, y el `rg-metaverso-databricks-managed` que `terraform destroy`
-  # nunca borraba (y que bloqueaba el deploy siguiente) ya no existe.
+  # No queda nada huérfano que limpiar a mano: todo recurso está declarado en infra/ y se
+  # va con su resource group — incluido el registro con sus imágenes.
   ok "No queda nada corriendo en Azure"
 }
 
@@ -594,7 +592,7 @@ Uso: ./scripts/deploy-azure.sh <comando> [-y] [--force]
   stop      Apaga el detector (0 réplicas — el contenedor deja de cobrar)
   status    IP, web, VM, réplicas del detector y salud de sus revisiones
   guard     Verifica que un apply no vaya a revertir el kill-switch (lo usa make infra-apply)
-  vm-stop   Desasigna la VM (deja de cobrar sus ~\$0.126/h)
+  vm-stop   Desasigna la VM (deja de cobrar sus \$0.133/h; el resto baja a \$0.044/h)
   vm-start  Vuelve a prender la VM
   down      terraform destroy de todo (lo único que deja el gasto en \$0)
 

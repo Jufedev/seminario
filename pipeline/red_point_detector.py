@@ -24,16 +24,14 @@ def env(name: str, default: str = "") -> str:
     """Read an env var, tolerating shell-style quoting.
 
     Container Apps hands the environment to the process directly, so nothing
-    quotes anything and this is a no-op there. It exists because Databricks —
-    the v1 runtime — exported a job's environment through a BASH SCRIPT, where
-    a value holding a space or a `;` had to be quoted or it broke silently:
-    `WINDOW_DURATION=10 seconds` split into two words, and the Event Hubs
-    connection string truncated at its first `;`.
+    quotes anything and this is a no-op there. It guards the case where these
+    values reach the process through a SHELL instead — a `.env` file, a wrapper
+    script, a CI runner — because there a value holding a space or a `;` has to
+    be quoted or it breaks silently: `WINDOW_DURATION=10 seconds` splits into
+    two words, and the Event Hubs connection string truncates at its first `;`.
 
-    Kept because it costs nothing and the trap it guards against is a property
-    of shells, not of Databricks: anything that ever routes these values through
-    one again (a `.env` file, a wrapper script, a CI runner) brings it straight
-    back. Stripping the quotes here makes the same value correct either way.
+    Stripping the quotes here makes the same value correct either way, and it
+    costs nothing.
     """
     return os.getenv(name, default).strip().strip("\"'")
 
@@ -158,10 +156,10 @@ def detect_red_points(
     stayed there: the mean dwell (stationary samples per avatar, ≈ seconds at
     the 1 Hz emit rate) must reach MIN_MEAN_DWELL_S, which excludes brief
     traffic-light stops. Grouping by room keeps simultaneous rooms from
-    pooling their congestion;
-    a null room (legacy messages) forms one group. Works on both streaming and
-    batch DataFrames (the watermark is ignored in batch), which is what makes
-    the logic unit-testable without Kafka.
+    pooling their congestion; a null room forms a single group, which the
+    server treats as global. Works on both streaming and batch DataFrames (the
+    watermark is ignored in batch), which is what makes the logic unit-testable
+    without Kafka.
 
     The grid parameters default to the env-driven module constants; tests pass
     them explicitly to stay hermetic.

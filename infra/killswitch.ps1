@@ -11,8 +11,7 @@
 # ships with Az.Accounts, Az.Compute, Az.Resources and friends — but NOT with Az.App. Using
 # the cmdlet would mean importing that module into the Automation Account (an extra resource,
 # a slow import, and a dependency chain that breaks quietly). The REST call needs nothing but
-# a token from Az.Accounts, which is always there. It is also exactly the idiom the v1 runbook
-# already used to reach the Databricks Jobs API.
+# a token from Az.Accounts, which is always there.
 #
 # WHY a PATCH with only the scale block: the Container Apps PATCH is a JSON Merge Patch
 # (RFC 7386), so nested objects merge instead of replacing. Sending just

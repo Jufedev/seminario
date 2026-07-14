@@ -29,7 +29,7 @@ export function renderPortada(app) {
     <div style="display:flex;gap:12px">
       <button class="btn" id="btn-online">🌐 Multi-usuario</button>
     </div>
-    <p style="font-size:11px;color:var(--text-dim)">El modo multi-usuario requiere el servidor: <code>npm run server</code></p>
+    <p style="font-size:11px;color:var(--text-dim)">El modo multi-usuario requiere el servidor: <code>make metaverse-server</code></p>
   `
   app.appendChild(view)
   view.querySelector('#btn-online').addEventListener('click', () => navigate('#/lobby'))

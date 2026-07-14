@@ -15,10 +15,11 @@ código corre en local y en Azure: solo cambian variables de entorno.
 
 El **Big Data es el detector de récord**. El metaverso es la FUENTE de datos
 (la simulación) y el renderizador; NO detecta los puntos rojos. La detección de
-congestión que el metaverso trae internamente (`src/analytics/zones.js`) queda
-**desconectada**: su código permanece, pero ya no alimenta el overlay ni el
-recálculo de rutas. Las zonas rojas que ve el usuario y que disparan el
-rerouteo provienen exclusivamente del topic `red-points` que emite Spark.
+congestión que el metaverso trae internamente (`src/analytics/zones.js`) está
+**desconectada a propósito**: corre en modo `metricsOnly` —calcula un índice de
+congestión para el panel del admin— y **no** alimenta el overlay ni el recálculo de
+rutas. Las zonas rojas que ve el usuario y que disparan el rerouteo provienen
+exclusivamente del topic `red-points` que emite Spark.
 
 No hay bridge: el servidor Node ya habla el protocolo Kafka de forma nativa
 (kafkajs), así que produce y consume directamente contra el mismo broker que el
@@ -122,24 +123,25 @@ Producido por el servidor (`metaverse/server/simulation.js`, muestreo por avatar
 | `ts` | reloj del servidor | `new Date().toISOString()` (ISO-8601 UTC) |
 
 > **Velocidad medida, no deseada.** Un auto encolado detrás de un bloqueo debe
-> reportar ~0. Emitir `speed[i]` (la velocidad objetivo) cegaría el filtro
-> `speed < 0.5` del detector — es el error crítico corregido en la integración v1
-> y trasladado aquí. El servidor guarda `_lastEmitX/Z/_time` por agente y calcula
-> el desplazamiento real; la primera muestra cae a `speed[i]·4`.
+> reportar ~0. La simulación mantiene además una velocidad **deseada** por agente
+> (`speed[i]`, a la que el auto *quiere* ir), y emitir esa cegaría el filtro
+> `speed < 0.5` del detector: un auto trabado sigue queriendo ir rápido. Por eso el
+> servidor guarda `_lastEmitX/Z/_time` por agente y calcula el desplazamiento real;
+> la primera muestra cae a `speed[i]·4`.
 
 El envelope del productor agrega `room` y un `ts` epoch, pero el payload se expande
 al final, así que **el `ts` ISO gana** (deliberado: el detector necesita event-time
 ISO-8601, no epoch). `room` sí lo usa el detector: agrupa por sala.
 
 > No hay proceso puente. El servidor Node produce a Kafka de forma nativa (kafkajs);
-> `KafkaBridge` es una CLASE en proceso, no un servicio aparte. El bridge Python de la
-> v1 fue eliminado del repo.
+> `KafkaBridge` es una CLASE en proceso, no un servicio aparte.
 
 ### 2. Salida del detector: `red-points`
 
 Incluye `room`: el detector agrupa por `(room, celda)`, así que cada punto rojo
-lleva la sala en la que se detectó (null en mensajes legacy sin envelope). La
-`key` de Kafka es `room_cell_x_cell_y` para que salas distintas no colisionen:
+lleva la sala en la que se detectó. Un mensaje sin `room` (envelope ausente) forma
+un único grupo con `room` nulo, y el servidor lo trata como global. La `key` de
+Kafka es `room_cell_x_cell_y` para que salas distintas no colisionen:
 
 ```json
 {
@@ -271,29 +273,3 @@ Todo el despliegue está automatizado: `make deploy` (ver [`../infra/README.md`]
       (`sim-events`, `avatar-positions`, `red-points`); el log debe decir `kafka:kafka`, no `kafka:local`
 - [ ] `make consume TOPIC=avatar-positions` muestra el esquema del pipeline (un mensaje por avatar)
 - [ ] Con una congestión formada, `make consume TOPIC=red-points` muestra el punto rojo y la zona se pinta en el navegador con recálculo de rutas
-
-### Hecho
-
-- ✅ **Dashboard del admin re-alimentado**: `ZoneSystem` corre en modo
-  `metricsOnly` (calcula el índice C y emite `analytics.snapshot` sin penalizar,
-  rerutear ni emitir `zone.red/clear`) → heatmap de C, C̄ global y zona crítica
-  vivos de nuevo. El KPI y la serie de zonas rojas salen del conteo del
-  `RedPointStore` (detector Spark), coherentes con el overlay de los clientes.
-
-- ✅ **Detección por sala**: el detector agrupa por `(room, celda)` y `red-points`
-  lleva `room` (salas simultáneas ya no mezclan congestión).
-- ✅ **Archivado a ADLS**: escritura opcional del feed histórico de
-  `avatar-positions` a Parquet vía `ARCHIVE_PATH` (dir local en dev, ADLS en prod).
-  **Apagado por defecto** en ambos perfiles; en Azure se enciende con
-  `ENABLE_ARCHIVE=true` en el despliegue.
-- ✅ **Consolidación en `sim-events`**: los 11 topics lógicos internos viajan en un
-  único topic físico (Event Hubs Standard limita a 10 hubs por namespace). Total:
-  3 topics físicos.
-- ✅ **Despliegue automatizado a Azure**: `make deploy` (una sola etapa de Terraform)
-  provisiona la infra, la VM con la app y el contenedor del detector;
-  `make detector-start` / `detector-stop` son el interruptor de la demo (`min_replicas`
-  1/0). Ver [`../infra/README.md`](../infra/README.md).
-- ✅ **El detector fuera de Databricks**: corre como contenedor en Azure Container Apps con
-  el MISMO `.py`. El job de Databricks era una sola JVM en modo local (`num_workers = 0`):
-  nunca necesitó un cluster. La v1 queda preservada en la rama `v1-databricks`. Historia
-  completa en [`memory/11-container-detector.md`](memory/11-container-detector.md).

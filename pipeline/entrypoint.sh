@@ -3,7 +3,7 @@
 #
 # It exists for two reasons, and it does NOT contain any detection logic:
 # pipeline/red_point_detector.py is byte-identical to the one that runs locally, and
-# that is the whole point of v2. Everything below is runtime plumbing around it.
+# that is the whole point. Everything below is runtime plumbing around it.
 #
 #   1. The ADLS storage key. The checkpoint (and, optionally, the archive) live on
 #      abfss://, and Hadoop takes the credential as a SPARK CONF, not an env var.

@@ -5,8 +5,8 @@ The metaverse server emits `avatar-positions` with `ts` produced by JavaScript's
 (e.g. "2026-07-07T12:00:00.000Z"). The detector parses it with a format-free
 `F.to_timestamp("ts")`. Whether that shape parses to a non-null timestamp (rather
 than silently becoming NULL, which would make `withWatermark` drop every row and
-the detector go dark) is the single most fragile part of the integration and was
-previously only asserted by prose in docs/integration-contract.md.
+the detector go dark) is the single most fragile part of the integration — and prose
+in docs/integration-contract.md cannot assert it. This test can.
 
 This test drives the REAL seam: it feeds raw JSON `value` payloads (exactly as
 they arrive from Kafka) through `parse_positions()` and then `detect_red_points()`.

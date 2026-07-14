@@ -128,8 +128,9 @@ export class RedPointStore {
     return [...out]
   }
 
-  // Legacy: unión de zonas activas de TODAS las salas (poda expiradas). Se mantiene
-  // por compatibilidad; el tick usa activeZonesFor(room.code) por sala.
+  // Vista global: unión de zonas activas de TODAS las salas (poda las expiradas).
+  // El tick NO la usa — usa activeZonesFor(room.code), porque mezclar salas pintaría
+  // en una la congestión de otra.
   activeZones() {
     const now = Date.now()
     const out = new Set()

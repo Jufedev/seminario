@@ -83,17 +83,14 @@ variable "killswitch_webhook_expiry" {
   default     = "2027-07-01T00:00:00Z"
 }
 
-# This is now the ONLY VM in the deployment, and that is the quiet headline of v2.
+# This is the ONLY VM in the deployment, and that is deliberate.
 #
-# Azure for Students caps vCPUs at 6 per region AND at 4 per VM family. In v1 the app VM
-# and the Databricks node had to be squeezed into different families (E2s_v3 + D4s_v3 =
-# exactly 6/6, at the ceiling) so they would not starve each other. Then Azure ran out of
-# D4s_v3 — the only 4-vCPU SKU this subscription can use in eastus2, since every other one
-# is Location-restricted — and the whole deployment failed with
-# CLOUD_PROVIDER_RESOURCE_STOCKOUT with nowhere to fall back to.
-#
-# The detector container has no VM SKU at all (Container Apps Consumption is serverless),
-# so nothing competes with this VM any more: 2 of 6 vCPUs, and no per-family contention.
+# Azure for Students caps vCPUs at 6 per region AND at 4 per VM family. The detector
+# container has no VM SKU at all (Container Apps Consumption is serverless), so nothing
+# competes with this VM: 2 of 6 vCPUs, and no per-family contention. That also means no
+# SKU that Azure can run out of — which matters here, because in eastus2 nearly every
+# 4-vCPU SKU is Location-restricted for this subscription, so a big compute node would
+# have exactly one possible size and no fallback if it were unavailable.
 #
 # Kept for whoever has to size a VM here again — the Zone/Location distinction is the whole
 # game when reading SKU availability:

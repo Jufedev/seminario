@@ -8,9 +8,8 @@
 #   2. scales the detector Container App down to min_replicas = 0 — the same switch
 #      `make detector-stop` uses.
 #
-# Step 2 replaces v1's "pause the Databricks jobs". Getting it wrong would have been
-# worse than useless: the kill-switch would have shut down the VM and left the detector
-# container running, which is precisely the thing that bills by the hour. A cost guard
+# Step 2 is not optional: without it the kill-switch would shut down the VM and leave the
+# detector container running, which is the other thing that bills by the hour. A cost guard
 # that does not stop the cost is not a guard.
 #
 # ⚠️ Azure cost data lags by hours. The kill-switch is a SAFETY NET, not a hard cap:
@@ -59,7 +58,7 @@ resource "azurerm_automation_variable_string" "vm_name" {
 }
 
 # The runbook reaches the Container App through the ARM API, so the full resource ID is
-# all it needs — no workspace URL, no per-service SDK. (v1 stored a DatabricksUrl here.)
+# all it needs — no per-service SDK, no endpoint URL to keep in sync.
 resource "azurerm_automation_variable_string" "detector_app_id" {
   count = var.enable_killswitch ? 1 : 0
 
@@ -87,7 +86,7 @@ resource "azurerm_automation_variable_string" "detector_app_id" {
 # On `containerApps/write`: ARM has no scale-only data action, and PATCH is a write. So
 # write is the floor, not a compromise we chose. What the scoping DOES buy is that the
 # blast radius stops at the Container App — the registry, the environment and the
-# Log Analytics workspace in the same group are now out of reach entirely.
+# Log Analytics workspace in the same group stay out of reach entirely.
 resource "azurerm_role_definition" "killswitch" {
   count = var.enable_killswitch ? 1 : 0
 

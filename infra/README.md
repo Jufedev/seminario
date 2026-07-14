@@ -3,10 +3,8 @@
 Provisiona la arquitectura de analítica en tiempo real (ver `docs/arquitectura.drawio`).
 
 **Una sola etapa de Terraform.** El detector corre como **contenedor** en Azure Container
-Apps, no en Databricks. El porqué está en [El detector: por qué un contenedor y no un
-cluster](#el-detector-por-qué-un-contenedor-y-no-un-cluster); el registro histórico completo,
-en [`../docs/memory/11-container-detector.md`](../docs/memory/11-container-detector.md). La
-v1 con Databricks queda preservada en la rama `v1-databricks`.
+Apps, no en un cluster. El porqué está en [El detector: por qué un contenedor y no un
+cluster](#el-detector-por-qué-un-contenedor-y-no-un-cluster).
 
 ## Cómo están nombradas las cosas
 
@@ -16,16 +14,14 @@ el portal tiene que poder decir qué hay adentro de un grupo **sin abrirlo**.
 | Resource group | Qué hay adentro | Costo |
 |---|---|---|
 | `rg-metaverso-network` | `vnet-metaverso-app`, `snet-metaverso-app-public`, `nsg-metaverso-app` — la red de la VM (abre 22, 80 y 8080) | Gratis |
-| `rg-metaverso-app` | `vm-metaverso-app` (E2s_v3, Ubuntu 22.04) + `pip-` / `nic-` / disco. Frontend nginx :80 y backend bun :8080, auto-provisionados por cloud-init | **~$0.126/h prendida** |
-| `rg-metaverso-streaming` | `evhns-metaverso-*` (Event Hubs Standard, 1 TU): hubs `avatar-positions`, `red-points` y `sim-events`, retención 7 días | **~$0.015/h** (~$11/mes) |
+| `rg-metaverso-app` | `vm-metaverso-app` (E2s_v3, Ubuntu 22.04) + `pip-` / `nic-` / disco. Frontend nginx :80 y backend bun :8080, auto-provisionados por cloud-init | **$0.133/h prendida** (+ $0.005/h de IP y $0.002/h de disco, que cobran **también desasignada**) |
+| `rg-metaverso-streaming` | `evhns-metaverso-*` (Event Hubs Standard, 1 TU): hubs `avatar-positions`, `red-points` y `sim-events`, retención 7 días | **$0.030/h** (~$22/mes). Un throughput unit se paga por estar reservado, haya tráfico o no |
 | `rg-metaverso-analytics` | El runtime del detector: `crmetaverso*` (registro), `cae-metaverso` (entorno de Container Apps), `ca-metaverso-detector` (el detector), `log-metaverso-detector` y la identidad que baja la imagen | Registro ~$5/mes + el detector solo mientras corre |
 | `rg-metaverso-datalake` | `stmetaverso*` (ADLS Gen2, LRS) + filesystem `avatar-events` — **checkpoint de Spark** (siempre) y archivo histórico (opt-in) | Centavos |
 | `rg-metaverso-governance` | `budget-metaverso`, `ag-metaverso-budget`, `aa-metaverso-killswitch` — control de gasto. No sirve tráfico | Gratis |
 
-**Seis grupos, y seis es lo que muestra el portal.** La v1 tenía un SÉPTIMO,
-`rg-metaverso-databricks-managed`, que **creaba Databricks solo**, Terraform no declaraba y
-`terraform destroy` **no borraba**: había que purgarlo a mano o bloqueaba el deploy siguiente.
-Ya no existe.
+**Seis grupos, y seis es lo que muestra el portal.** Todo lo que existe en Azure está
+declarado en `infra/`: si el portal muestra un séptimo grupo, alguien creó algo a mano.
 
 **Los nombres cortos van acompañados de un tag `proposito`** (en español, en cada recurso). Es
 la salida al problema de que Azure limita los nombres: un storage account no puede pasar de 24
@@ -41,44 +37,31 @@ az resource list --query "[].{nombre:name, proposito:tags.proposito}" -o table
 
 ## El detector: por qué un contenedor y no un cluster
 
-El 2026-07-13 el job de Databricks dejó de arrancar:
+**Empecemos por lo que hace un cluster de Spark:** repartir el trabajo entre varias máquinas.
+Eso cuesta —coordinación, red, tiempo de arranque— y ese costo se paga **solo si hay algo que
+repartir**.
 
-```
-CLOUD_PROVIDER_RESOURCE_STOCKOUT: The requested VM size 'Standard_D4s_v3' is
-currently not available in location 'eastus2'
-```
+**¿Cuánto dato mueve este pipeline?** Una muestra por avatar por segundo. Con cien avatares,
+cien mensajes JSON por segundo. Un solo core moderno hace eso con la mano en el bolsillo.
 
-**No era cuota** (la familia DSv3 marcaba 0 de 4 vCPUs usados): Azure sencillamente no tenía
-capacidad de esa máquina en la región. Y **no había SKU alternativo**: todo otro SKU de 4 vCPU
-está restringido por `Location` para una suscripción de estudiante — o sea, genuinamente no
-disponible (ver [`Zone` vs `Location`](#zone-vs-location-la-distinción-que-lo-decide-todo)).
-Tampoco servía *spot*: el spot corre sobre capacidad **sobrante**, y un stockout significa
-justamente que no hay.
+Por eso el detector es **una sola JVM** (`spark.master = "local[*]"`) corriendo en un
+**contenedor**, con el **mismo `pipeline/red_point_detector.py`** que corre en la laptop,
+copiado byte a byte dentro de la imagen. Nunca distribuye una tarea, nunca hace *shuffle* entre
+máquinas. Un cluster no le agregaría cómputo: le agregaría coordinación que nadie le pidió.
 
-Buscando un plan B apareció el hallazgo de verdad. El job de la v1 corría con:
+Y sigue siendo **Apache Spark Structured Streaming** —las mismas ventanas, el mismo watermark,
+el mismo checkpoint, el mismo motor—: la tesis pide Spark, y el modo local es parte del propio
+Apache Spark, no una imitación.
 
-```hcl
-num_workers = 0
-spark_conf  = { "spark.master" = "local[*, 4]" }
-```
+Lo que ese diseño compra, en concreto:
 
-**Cero workers, modo local.** El detector siempre fue **una sola JVM**. Nunca distribuyó una
-tarea. Databricks era un envoltorio caro y limitado por capacidad alrededor de **un proceso
-Python**. El stockout fue el síntoma que nos hizo mirar; el hallazgo es que el cluster nunca
-hizo falta.
-
-Hoy el detector corre en un contenedor con el **mismo `pipeline/red_point_detector.py`**,
-copiado byte a byte. Sigue siendo **Apache Spark Structured Streaming** — lo que se fue es el
-intermediario, no la tecnología (la tesis pide Spark, no Databricks).
-
-| | Databricks (v1) | Container Apps (v2) |
-|---|---|---|
-| Interruptor de la demo | `detector_running` → pausa el job | `min_replicas` 0 / 1 |
-| Tiempo hasta correr | ~5 min (arranca el job-cluster) | **segundos** |
-| Costo corriendo | ~$0.60/h | ~$0.10/h |
-| Costo apagado | **NAT gateway ~$0.045/h** mientras el *workspace* existiera | nada |
-| Restos tras `destroy` | `rg-metaverso-databricks-managed` | ninguno |
-| Etapas de Terraform | 2 | **1** |
+| | Container Apps |
+|---|---|
+| Interruptor de la demo | `min_replicas` 0 / 1 |
+| Tiempo hasta correr | **segundos** |
+| Costo corriendo | **$0** dentro de la cuota mensual gratis; **$0.216/h** una vez agotada |
+| Costo apagado | **nada**: 0 réplicas = no hay proceso = no hay factura |
+| SKU de VM del que Azure pueda quedarse sin stock | ninguno (Consumption es serverless) |
 
 Container Apps Consumption además tiene una **cuota mensual gratis** (180k vCPU-s + 360k
 GiB-s) que a 2 vCPU / 4 GiB cubre **~25 h de detector**: una demo normalmente no paga cómputo
@@ -90,37 +73,32 @@ sería un segundo detector emitiendo los mismos puntos rojos.
 
 ### La imagen se construye ACÁ, con el podman del host
 
-Hasta el 2026-07-13 la imagen se construía con `az acr build`, o sea **dentro de Azure**, y el
-motivo declarado era: *"en esta caja no hay Docker ni Podman"*.
-
-**Era falso, y vale la pena entender por qué.** Es cierto que dentro de la distrobox no hay
-podman — pero **esta distrobox la corre el podman del host**. El motor de build siempre estuvo
-ahí, a un salto de distancia: la caja simplemente no lo veía. `distrobox-host-exec` lo alcanza.
+**Podman va en el HOST, no adentro de la caja** — y no es un descuido del distrobox: es el
+motor que corre esta distrobox, así que ya está ahí, a un salto de distancia.
+`distrobox-host-exec` lo alcanza.
 
 ```
 distrobox (Ubuntu 24.04)  ──distrobox-host-exec──►  podman del host (Fedora)
   terraform, az, make                                  build + push
 ```
 
-**Podman va en el HOST, no adentro de la caja.** Podman-dentro-de-podman rootless no tiene
-overlay-sobre-overlay, así que cae al driver de almacenamiento `vfs`, que **copia el filesystem
-entero por capa**: para una imagen de Spark de ~1 GB eso es lento y voraz. El proyecto ya
-descartó Docker-dentro-de-distrobox por frágil; hacerlo con podman sería el mismo error con otro
-binario.
+Podman-dentro-de-podman rootless no tiene overlay-sobre-overlay, así que cae al driver de
+almacenamiento `vfs`, que **copia el filesystem entero por capa**: para una imagen de Spark de
+~1 GB eso es lento y voraz. Instalar un motor de contenedores *dentro* de la caja sería pagar
+eso para nada.
 
-**Lo que ganamos** — y es lo que justifica el cambio, no el gusto:
+**Lo que compra construir la imagen acá y no del lado de Azure:**
 
 - La imagen se puede **correr y probar antes de que toque Azure**: `make detector-image` la
   construye sin push, sin registro y sin sesión de Azure.
-- Se pudo **verificar la afirmación central del Dockerfile**, que hasta ahora era un acto de fe:
+- Deja **verificable** la afirmación central del Dockerfile, en vez de ser un acto de fe:
   corriendo la imagen con `--network none`, Ivy resuelve el conector de Kafka **desde la caché
-  horneada** y el detector arranca igual. Con el build adentro de Azure eso no era comprobable.
-- El build deja de depender de un agente de build del lado de Azure.
+  horneada** y el detector arranca igual. Un build del lado de Azure no permite comprobarlo.
+- El despliegue no depende de un agente de build remoto.
 
-**Lo que cuesta, dicho sin maquillaje:** `az acr build` subía un contexto de ~20 KB y hacía el
-trabajo pesado en la red de Azure. Ahora el primer push manda **~450 MB comprimidos** desde esta
-máquina (la imagen pesa 951 MB). Los push siguientes solo mandan las capas que al registro le
-faltan.
+**Lo que cuesta, dicho sin maquillaje:** el trabajo pesado ocurre en tu máquina y sale por tu
+conexión — el primer push manda **~450 MB comprimidos** (la imagen pesa 951 MB). Los push
+siguientes solo mandan las capas que al registro le faltan.
 
 El registro **no tiene admin user**, así que el push se autentica con un **token ARM de vida
 corta** (`az acr login --expose-token`), que viaja por **stdin** y nunca aparece en `ps`. Por eso
@@ -157,9 +135,8 @@ error de pull).
 org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1`. Eso es una config **de submit**: Ivy resuelve
 la coordenada contra Maven Central **cada vez que arranca la JVM**.
 
-En Databricks era gratis (el conector venía en el runtime). En un contenedor efímero significaría
-una dependencia **en tiempo de ejecución** con Maven Central, 30-60 s de arranque, y un detector
-que se muere si Maven tiene un mal minuto.
+En un contenedor efímero eso significaría una dependencia **en tiempo de ejecución** con Maven
+Central: 30-60 s de arranque, y un detector que se muere si Maven tiene un mal minuto.
 
 Por eso la resolución pasa al **build**: los JARs quedan en `/opt/ivy` dentro de la imagen y en
 runtime Ivy los encuentra ya cacheados y resuelve **offline**. Lo mismo con `hadoop-azure:3.3.4`,
@@ -182,7 +159,7 @@ Y acá es donde `is_hns_enabled = true` deja de ser un checkbox: un **namespace 
 **rename atómico**, la primitiva sobre la que está construido el protocolo de commit del
 checkpoint de Spark. Un blob plano no puede darla.
 
-> ⚠️ **Consecuencia — y es la semántica de la v1 volviendo:** el checkpoint guarda los offsets de
+> ⚠️ **Consecuencia:** el checkpoint guarda los offsets de
 > Event Hubs y el estado de las ventanas. Cambiar `WINDOW_DURATION`, `WINDOW_SLIDE` o la
 > agregación en prod pide una **migración** del checkpoint, no un borrado. `make clean` es un
 > movimiento de **dev**. `scripts/deploy-azure.sh` compara la ventana nueva contra la última
@@ -210,23 +187,25 @@ que exista y siga.
 
 ### No hay consumer groups declarados (a propósito)
 
-La v1 declaraba dos (`spark-detector` y `metaverse-backend`) y **nadie los usaba**:
+Terraform no declara ningún consumer group en Event Hubs, y no es un olvido: **nadie de los que
+leen toma un group id que le podamos dar**.
 
-- La fuente Kafka de Spark **no toma un group id nuestro**: genera el suyo
-  (`spark-kafka-source-<uuid>`) y lleva los offsets en **su checkpoint**, no en el broker. Ese es
-  el diseño, y es lo que hace que las semánticas de reinicio de arriba funcionen.
+- La fuente Kafka de Spark **genera el suyo** (`spark-kafka-source-<uuid>`) y lleva los offsets
+  en **su checkpoint**, no en el broker. Ese es el diseño, y es lo que hace que las semánticas de
+  reinicio de arriba funcionen.
 - `RedPointStore` usa un group id **efímero por proceso**, para que un reinicio del servidor no
   pueda resucitar zonas rojas viejas desde un offset confirmado. Las zonas rojas son estado
   **vivo**, con TTL.
-- El consumidor de analytics usa `ecci-analytics`.
+- El consumidor de analytics usa `ecci-analytics`, un group id que fija el propio cliente
+  (`metaverse/analytics/consumer.js`) al conectarse, no Terraform.
 
-Eran decoración, y el diagrama de arquitectura repetía la ficción como si fuera un hecho ("Spark
-consume (cg: spark-detector)"). Se borraron.
+Declarar grupos que nadie usa es peor que no declararlos: dan la ilusión de que alguien lleva
+offsets en el broker, y ahí no vive el estado de nadie.
 
 ## Los límites de Azure for Students (leer antes de tocar SKUs o región)
 
-Esta sección sigue siendo válida — y ahora es, además, **la evidencia de por qué el detector se
-fue de las VMs**.
+Estas restricciones condicionan el diseño entero: son la razón de que haya **una sola VM** y de
+que el detector no tenga SKU de VM.
 
 Una suscripción de estudiante impone **tres restricciones distintas a la vez**. Las tres fallan
 de forma diferente, y confundirlas cuesta horas:
@@ -244,21 +223,18 @@ az policy assignment list --query "[].parameters" -o json
 # -> southcentralus, brazilsouth, eastus2, mexicocentral, canadacentral
 ```
 
-En la v1 el reparto de vCPUs **entraba exacto y sin margen**:
+El reparto de vCPUs del despliegue es holgado, y a propósito:
 
 | Recurso | SKU | Familia | vCPUs |
 |---|---|---|---|
 | VM de la app | `Standard_E2s_v3` | ESv3 (límite 4) | 2 |
-| ~~Nodo de Databricks~~ | ~~`Standard_D4s_v3`~~ | ~~DSv3 (límite 4)~~ | ~~4~~ |
-| | | **Total v1** | **6 / 6** |
+| Detector | — (Container Apps Consumption: serverless) | — | 0 |
+| | | **Total** | **2 / 6** |
 
-Estaban en familias distintas **a propósito**: en la misma se habrían comido los 4 vCPUs entre
-ellas y el cluster nunca habría arrancado, con un error de *cuota* que aparece en Databricks sin
-nada que apunte a la VM que se comió el presupuesto.
-
-**Hoy la VM de la app es la ÚNICA VM del despliegue: 2 de 6 vCPUs, sin contención por familia.**
-El detector no tiene SKU de VM (Container Apps Consumption es serverless), así que no hay ningún
-SKU del que Azure pueda quedarse sin stock.
+**La VM de la app es la ÚNICA VM del despliegue**, así que no hay contención por familia: nadie
+le come los vCPU a nadie, y no hay error de cuota que pueda aparecer en el recurso equivocado.
+El detector no tiene SKU de VM, así que tampoco hay ningún SKU del que Azure pueda quedarse sin
+stock: el cómputo grande es justamente el que la cuota Student aprieta.
 
 ### `Zone` vs `Location`: la distinción que lo decide todo
 
@@ -278,10 +254,11 @@ az vm list-skus -l eastus2 --resource-type virtualMachines --all \
 > Filtrar por "SKUs sin ninguna restricción" es la trampa: esconde SKUs perfectamente
 > usables. `Standard_E2s_v3` tiene las tres zonas restringidas y aun así funciona.
 
-Esta distinción es exactamente la que dejó al detector sin salida en la v1: **todo SKU de 4 vCPU
-distinto de `Standard_D4s_v3` está restringido por `Location`** en esta suscripción. Cuando Azure
-se quedó sin stock de D4s_v3, no había a dónde caer. Un stockout no es una cuota: **no se
-resuelve pidiendo más**.
+Y esta distinción es la que hace peligroso cualquier diseño que dependa de una VM grande: en esta
+suscripción **prácticamente todo SKU de 4 vCPU está restringido por `Location`**, así que quedaría
+un único tamaño posible y **ningún plan B** si Azure se queda sin capacidad de ese tamaño. Un
+stockout no es una cuota: **no se resuelve pidiendo más**, y *spot* tampoco salva (el spot corre
+sobre capacidad sobrante, y un stockout significa justamente que no hay).
 
 Cuotas por familia: `az vm list-usage -l eastus2 -o table`.
 
@@ -341,10 +318,9 @@ con él, porque comparte `awaitAnyTermination()` con el de zonas rojas).
 
 ### Una sola etapa de Terraform
 
-La v1 tenía dos módulos raíz (`infra/` + `infra/databricks/`) por **un único motivo**: el
-provider `databricks` necesitaba la URL del workspace, y **un provider no se puede configurar
-con un valor que se crea en el mismo `apply`**. Sin Databricks, el motivo desapareció.
-`infra/databricks/` está borrado.
+Todo el stack vive en **un único módulo raíz** (`infra/`): un solo `state`, un solo `apply`, un
+solo `destroy`. Ningún provider necesita configurarse con un valor que se cree en el mismo apply,
+que es lo único que obligaría a partirlo en dos.
 
 ### El detector: encendido y apagado
 
@@ -355,15 +331,22 @@ corriendo. El estado deseado vive en `infra/terraform.tfvars` (`detector_running
 > ⚠️ **`make detector-stop` NO deja el gasto en $0.** Apaga el contenedor, no el despliegue.
 > Sigue cobrando:
 >
-> | Recurso | Costo |
-> |---|---|
-> | VM de la app (prendida) | ~$0.126/h ← lo más caro que queda |
-> | Event Hubs (Standard, 1 TU) | ~$0.015/h |
-> | Registro (ACR Basic) | ~$5/mes fijo |
-> | Log Analytics | por ingesta (poco a este volumen; 5 GiB/mes son gratis) |
+> | Recurso | Costo | ¿Sobrevive a `vm-stop`? |
+> |---|---|---|
+> | VM de la app (prendida) | $0.133/h ← lo más caro que queda **prendido** | No |
+> | Event Hubs (Standard, 1 TU) | $0.030/h | **Sí** ← el mayor gasto después de `vm-stop` |
+> | Registro (ACR Basic) | $5/mes fijo ($0.007/h) | **Sí** |
+> | IP pública (Standard, estática) | $0.005/h | **Sí** |
+> | Disco de SO (S4) | $0.002/h | **Sí** |
+> | Log Analytics | por ingesta (poco a este volumen; 5 GiB/mes son gratis) | — |
 >
-> Total **≈ $0.15/hora ≈ $3.4/día**. `./scripts/deploy-azure.sh vm-stop` desasigna la VM;
-> **solo `make deploy-down` deja el gasto en cero.**
+> Total **$0.177/hora ≈ $4.25/día**. `./scripts/deploy-azure.sh vm-stop` desasigna la VM y lo
+> baja a **$0.044/h (~$32/mes)** — pero no a cero: la IP y el disco son *almacenamiento
+> reservado*, no cómputo, y un throughput unit se paga por estar reservado.
+> **Solo `make deploy-down` deja el gasto en cero.**
+>
+> Con el stack desplegado y ocioso, el crédito de $100 dura **23 días**. Desglose completo y
+> verificado contra la factura: [`../docs/costos-azure.md`](../docs/costos-azure.md).
 
 ### Verificación end-to-end
 
@@ -418,10 +401,9 @@ El runbook **no borra nada**: desasigna la VM (una VM "detenida" sigue cobrando;
 que usa `make detector-stop`. Volvés con `make detector-start` y
 `./scripts/deploy-azure.sh vm-start`.
 
-> Este paso reemplaza al "pausar los jobs de Databricks" de la v1. Errarle habría sido peor
-> que inútil: el kill-switch apagaría la VM y dejaría el contenedor del detector corriendo,
-> que es justamente lo que cobra por hora. **Un guardián de costos que no corta el costo no
-> es un guardián.**
+> Que el runbook apague **las dos** cosas es el punto: si solo desasignara la VM, dejaría el
+> contenedor del detector corriendo — que es justamente lo otro que cobra por hora. **Un
+> guardián de costos que no corta el costo no es un guardián.**
 
 **Cómo llega el runbook a la Container App:** por la **API REST de ARM**, no con
 `Update-AzContainerApp`. Un Automation Account trae `Az.Accounts`/`Az.Compute` pero **no**
@@ -573,6 +555,6 @@ medio: `make detector-image`.
 make deploy-down
 ```
 
-Sin Databricks **no queda nada huérfano que limpiar**: el registro y sus imágenes se van con
-el resource group, y el `rg-metaverso-databricks-managed` que `terraform destroy` nunca borraba
-—y que bloqueaba el deploy siguiente— ya no existe.
+`make deploy-down` borra **todo**, y no queda nada huérfano que limpiar a mano: cada recurso está
+declarado en `infra/` y se va con su resource group — incluido el registro con sus imágenes. El
+gasto queda en $0.

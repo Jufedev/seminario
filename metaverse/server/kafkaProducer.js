@@ -89,7 +89,7 @@ export class KafkaBridge {
         console.error('[kafka] FALLO conectando a Event Hubs (prod):', err.message,
           '— revisa EVENTHUBS_CONNECTION_STRING / KAFKA_BOOTSTRAP. Cayendo a modo LOCAL (sin Spark ni detección).')
       } else {
-        console.log('[kafka] broker no disponible — modo LOCAL (bus en-proceso, misma analítica). Levántalo con: npm run kafka:up')
+        console.log('[kafka] broker no disponible — modo LOCAL (bus en-proceso, misma analítica). Levántalo con: make kafka-start')
       }
     }
     return this.mode

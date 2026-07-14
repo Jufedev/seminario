@@ -1,7 +1,7 @@
 # ════════════════════════════════════════════════════════════════
 #  Kafka local para desarrollo (M5) — un solo broker en modo KRaft
 #  (sin Zookeeper), imagen OFICIAL apache/kafka.
-#  Arrancar:  npm run kafka:up   (o docker compose up -d)
+#  Arrancar:  make docker-kafka-up   (o docker compose up -d)
 #  El servidor Node se conecta a localhost:9092; si el broker no está,
 #  cae automáticamente al bus local en-proceso (misma analítica).
 # ════════════════════════════════════════════════════════════════

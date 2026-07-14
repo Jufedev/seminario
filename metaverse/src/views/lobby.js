@@ -13,7 +13,7 @@ export function renderLobby(app) {
   view.innerHTML = `
     <h1>🌐 Modo multi-usuario</h1>
     <p class="subtitle">1 administrador + hasta 3 usuarios comparten el mismo mundo en tiempo real.<br>
-    El servidor debe estar corriendo: <code>npm run server</code></p>
+    El servidor debe estar corriendo: <code>make metaverse-server</code></p>
     <div class="lobby-grid">
       <div class="panel lobby-card">
         <h3>👑 Crear sala (Admin)</h3>
@@ -71,7 +71,7 @@ export function renderLobby(app) {
     msg.classList.add('error')
   })
   const offStatus = session.on('status', st => {
-    if (st === 'closed') { setBusy(false); msg.textContent = '🔴 Sin conexión con el servidor (¿corre npm run server?)'; msg.classList.add('error') }
+    if (st === 'closed') { setBusy(false); msg.textContent = '🔴 Sin conexión con el servidor (¿corre make metaverse-server?)'; msg.classList.add('error') }
   })
 
   window.__teardownView = () => { offJoined(); offError(); offStatus() }

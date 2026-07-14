@@ -7,13 +7,9 @@
 # Compute:   one VM hosting the metaverse frontend and backend, plus the
 #            serverless container that runs the detector.
 #
-# ONE root module, ONE `terraform apply`. v1 was split in two stages
-# (infra/ + infra/databricks/) for a single reason: the `databricks` provider had
-# to be configured with a workspace URL that was created in the same apply, and a
-# provider cannot be configured from a resource it is creating. With Databricks
-# gone that constraint is gone with it — and so are the NAT gateway it billed by
-# the hour and the rg-<project>-databricks-managed group it left behind on every
-# destroy. v1 is preserved on the `v1-databricks` branch.
+# ONE root module, ONE `terraform apply`, ONE state. Nothing here needs a provider
+# configured from a value created in the same apply, which is the only thing that
+# would force splitting this into stages.
 #
 # Layout follows docs/arquitectura.drawio: one resource group per pipeline role
 # under SUB-Prod. The management group and subscription are managed outside
@@ -50,10 +46,8 @@ resource "random_string" "suffix" {
 # opening it. Every group also carries a `proposito` tag, which the portal can
 # show as a column.
 #
-# Six groups, and six is what the portal shows. v1 had a SEVENTH,
-# rg-<project>-databricks-managed, which Databricks created for itself, Terraform
-# never owned, and `terraform destroy` never deleted — it had to be purged by
-# hand or it blocked the next deploy. It no longer exists.
+# Six groups, and six is what the portal shows: everything that exists in Azure is
+# declared here, so a seventh group means somebody created something by hand.
 
 resource "azurerm_resource_group" "network" {
   name     = "rg-${var.project_name}-network"
@@ -73,10 +67,8 @@ resource "azurerm_resource_group" "streaming" {
   tags     = merge(local.tags, { proposito = "Transporte de eventos: Event Hubs, el 'Kafka' administrado del pipeline" })
 }
 
-# Same group as in v1, repurposed: it used to hold the Databricks workspace, it
-# now holds the container runtime that replaced it (registry, Container Apps
-# environment, the detector app and its logs — see detector.tf). Same role in the
-# pipeline, so the same group.
+# The analytics group holds the detector's whole runtime: registry, Container Apps
+# environment, the detector app and its logs — see detector.tf.
 resource "azurerm_resource_group" "analytics" {
   name     = "rg-${var.project_name}-analytics"
   location = var.location
@@ -267,10 +259,8 @@ resource "azurerm_eventhub" "sim_events" {
   message_retention = 7
 }
 
-# NO consumer groups are declared, and that is deliberate.
-#
-# There used to be two — `spark-detector` on avatar-positions and `metaverse-backend`
-# on red-points — and NOTHING ever used them:
+# NO consumer groups are declared, and that is deliberate: none of the readers takes a
+# group id we could give it.
 #
 #   * Spark's Kafka source does not take a group id from us. It generates its own
 #     (`spark-kafka-source-<uuid>`) and tracks offsets in ITS checkpoint, not in the
@@ -279,11 +269,11 @@ resource "azurerm_eventhub" "sim_events" {
 #   * RedPointStore uses a per-process ephemeral group id on purpose
 #     (`ecci-redpoints-<pid>-<ts>`), so that a server restart cannot resurrect stale
 #     red zones from a committed offset. Red zones are LIVE state with a TTL.
-#   * The analytics consumer uses `ecci-analytics`.
+#   * The analytics consumer sets `ecci-analytics` in the client itself
+#     (metaverse/analytics/consumer.js), not here.
 #
-# So the two declared groups were decoration that the architecture diagram then
-# repeated as fact ("Spark consume (cg: spark-detector)"). Deleting them makes the
-# code and the diagram tell the same story, which is the only version worth defending.
+# Declaring groups nobody uses is worse than declaring none: it suggests somebody is
+# tracking offsets in the broker, and nobody's state lives there.
 
 # Single namespace-level connection string for producer, Spark and consumer.
 # Enough for an academic project; production would use per-app rules.
@@ -331,8 +321,8 @@ resource "azurerm_storage_data_lake_gen2_filesystem" "events" {
 }
 
 # --- The detector -----------------------------------------------------------
-# It used to live here as an azurerm_databricks_workspace. It now runs as a
-# container on Azure Container Apps: see detector.tf, which also explains why.
+# It runs as a container on Azure Container Apps: see detector.tf, which also
+# explains why a container and not a cluster.
 
 # --- Budget guard: alert early, then cut the bill --------------------------
 # Subscription-level so it covers every resource group at once.

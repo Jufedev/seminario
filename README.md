@@ -22,8 +22,9 @@ Navegador (cliente delgado)        Servidor autoritativo (Node/bun)        Spark
 - **Servidor autoritativo:** el servidor corre TODA la simulación; los navegadores
   solo renderizan lo que reciben. Es la única fuente de verdad de las posiciones,
   lo que da un punto limpio para producir a Kafka.
-- **Sin bridge:** el servidor habla Kafka nativo (kafkajs); produce
-  `avatar-positions` y consume `red-points` directamente.
+- **Sin proceso intermedio:** el servidor habla Kafka nativo (kafkajs); produce
+  `avatar-positions` y consume `red-points` directamente. No hay un servicio puente
+  aparte que traducir ni desplegar.
 - **Detección solo en Big Data:** la detección interna del metaverso está
   desconectada; las zonas rojas provienen de Spark. Contrato completo en
   [`docs/integration-contract.md`](docs/integration-contract.md).
@@ -32,7 +33,7 @@ Navegador (cliente delgado)        Servidor autoritativo (Node/bun)        Spark
 
 ```
 metaverse/        Metaverso Three.js — fuente de datos + render (corre con bun)
-  server/         Servidor autoritativo + puente Kafka (avatar-positions / red-points)
+  server/         Servidor autoritativo — produce y consume Kafka (avatar-positions / red-points)
   src/            Cliente del navegador (render, red, vistas) — solo modo online
 pipeline/         Big Data — el detector Spark (red_point_detector.py)
   Dockerfile      La imagen con la que el MISMO detector corre en Azure
@@ -40,15 +41,14 @@ env/              Perfiles de entorno: env.dev.example · env.prod.example
 infra/            Terraform (Azure: Event Hubs + Container Apps + ADLS + VM) — entorno productivo
 scripts/          kafka-local.sh (Kafka nativo) · dev-up.sh (loop local) · deploy-azure.sh (Azure)
 tests/            Tests de la lógica de detección y del parseo de posiciones
-docs/             Contrato de integración, bitácora de decisiones, diagramas
+docs/             Cómo funciona, contrato de integración, costos, diagramas
 ```
 
 En Azure el detector corre como **contenedor** (Azure Container Apps), no en un cluster: el
-job de Databricks de la v1 era una sola JVM en modo local (`num_workers = 0`) y nunca
-necesitó uno. Sigue siendo Apache Spark Structured Streaming, con el `.py` sin tocar. El
-porqué, desde cero, en
+volumen de datos del pipeline cabe de sobra en una sola JVM, y un cluster solo agregaría
+coordinación que nadie necesita. Sigue siendo Apache Spark Structured Streaming, con el mismo
+`.py` que corre en local. El porqué, desde cero, en
 [`docs/como-funciona.md` §7.1](docs/como-funciona.md#71-por-qué-el-detector-no-corre-en-un-cluster).
-La v1 queda preservada en la rama `v1-databricks`.
 
 ## Requisitos
 
@@ -84,7 +84,7 @@ make metaverse-install  # bun install del metaverso (primera vez)
 ```bash
 make kafka-start        # broker Kafka en localhost:9092
 make detector           # detector Spark (celdas 30×30 ancladas en (-240,-195))
-make metaverse-server   # servidor autoritativo + puente Kafka
+make metaverse-server   # servidor autoritativo (produce y consume Kafka)
 make metaverse-web      # cliente del navegador (Vite vía bun)
 ```
 
@@ -143,7 +143,7 @@ y el contenedor del detector (registro de imágenes + Azure Container Apps).
 make deploy
 ```
 
-Un solo comando hace todo lo que antes era una checklist manual:
+Un solo comando cubre todo el ciclo, sin checklists manuales:
 
 | Paso | Qué hace |
 |---|---|
@@ -167,13 +167,19 @@ make detector-stop     # detector OFF — apagalo apenas termine la demo
 ```
 
 `min_replicas` es el interruptor: 0 réplicas = no hay contenedor = el detector no
-cobra. **Pero eso NO deja el gasto en $0:** siguen cobrando la VM (~$0.126/h),
-Event Hubs (~$0.015/h), el registro (~$5/mes) y Log Analytics — ~$0.15/h en total.
+cobra. **Pero eso NO deja el gasto en $0:** siguen cobrando la VM ($0.133/h),
+Event Hubs ($0.030/h), el registro ($5/mes), la IP pública ($0.005/h) y el disco —
+**$0.177/h ≈ $4.25/día** en total.
 
 ```bash
-./scripts/deploy-azure.sh vm-stop   # desasigna la VM (lo más caro que queda)
+./scripts/deploy-azure.sh vm-stop   # desasigna la VM (lo más caro que queda PRENDIDO)
 make deploy-down                    # destruye TODO — lo único que deja el gasto en $0
 ```
+
+> Ojo: después de `vm-stop` **seguís pagando $0.044/h** (~$32/mes), y ahí el mayor
+> gasto pasa a ser Event Hubs, no la VM. Con el stack desplegado y ocioso, el crédito
+> de $100 se agota en **23 días**. Números verificados contra la factura real y
+> desglosados en [`docs/costos-azure.md`](docs/costos-azure.md).
 
 **Verificación end-to-end:** abrir la web, crear una sala como admin, unir
 usuarios con el código e invocar flotas grandes. Al formarse una cola (≥7
@@ -210,6 +216,6 @@ Spark, los límites de Azure for Students, el kill-switch del presupuesto):
 Referencia:
 
 - [`docs/integration-contract.md`](docs/integration-contract.md) — el contrato formal: topics, esquemas JSON, coordenadas, variables de entorno
-- [`infra/README.md`](infra/README.md) — despliegue a Azure, costos por recurso, ciclo de la demo
-- [`docs/memory/`](docs/memory/) — bitácora de decisiones técnicas (histórica, con fechas y tipo)
-- `documentacion-ia-azure.md` — registro de prompts/outputs de IA (formato ECCI)
+- [`docs/costos-azure.md`](docs/costos-azure.md) — **la fuente de verdad de los costos**: qué se cobra, por hora, verificado contra la factura real. Leelo ANTES de dejar el stack prendido
+- [`infra/README.md`](infra/README.md) — despliegue a Azure, los límites de Azure for Students, el presupuesto y el kill-switch, ciclo de la demo
+- [`docs/arquitectura.drawio`](docs/arquitectura.drawio) — los diagramas (producción en Azure y entorno local)

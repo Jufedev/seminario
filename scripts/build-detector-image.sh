@@ -11,19 +11,15 @@
 #   ./scripts/build-detector-image.sh <registry> <login-server> <tag> <dockerfile> <context>
 #   ./scripts/build-detector-image.sh --local-only    # build it, push nothing, touch no Azure
 #
-# WHY LOCAL, when this used to be `az acr build` (which built inside Azure):
-#
-#   The old comment said "there is no Docker or Podman on the dev box". That was true
-#   of the BOX and false of the machine: this project's distrobox is itself run by the
-#   host's Podman. It was always there, one hop away.
+# WHY THE BUILD RUNS LOCALLY AND NOT ON AZURE'S SIDE:
 #
 #   What building here buys: the image can be RUN and smoke-tested before it ever
 #   reaches Azure, the build does not depend on an Azure-side build agent, and it is
 #   reproducible offline.
 #
-#   What it costs, stated honestly: `az acr build` uploaded a ~20 KB context and did
-#   the heavy lifting on Azure's network. We now push ~450 MB (compressed) from here
-#   the first time. Later pushes only send the layers the registry lacks.
+#   What it costs, stated honestly: the heavy lifting happens on this machine and
+#   leaves over this connection — ~450 MB (compressed) on the first push. Later pushes
+#   only send the layers the registry lacks.
 #
 # WHERE PODMAN RUNS: on the HOST, reached with distrobox-host-exec. NOT inside the box.
 # Podman-inside-Podman rootless has no overlay-on-overlay, so it falls back to the `vfs`

@@ -1,22 +1,20 @@
-# The red-point detector, containerised — the Spark runtime of record in v2.
+# The red-point detector, containerised — the Spark runtime of record.
 #
-# WHY this exists (v1 ran the detector as a Databricks continuous job):
-# infra/databricks/main.tf created a job cluster with `num_workers = 0` and
-# `spark.master = "local[*, 4]"`. The detector was therefore always a SINGLE JVM
-# in Spark local mode — it never needed a cluster. Databricks was an expensive,
-# capacity-bound wrapper around one Python process, and on 2026-07-13 it took the
-# whole deployment down with it:
+# WHY a container and not a cluster: a Spark cluster spreads work across machines,
+# and that only pays for itself when there is something to spread. This pipeline
+# carries one sample per avatar per second — a hundred avatars is a hundred JSON
+# messages a second, which a single core handles without breaking a sweat. So the
+# detector is a SINGLE JVM in Spark local mode (`spark.master = "local[*]"`): it
+# never distributes a task and never shuffles between machines.
 #
-#   CLOUD_PROVIDER_RESOURCE_STOCKOUT: The requested VM size 'Standard_D4s_v3' is
-#   currently not available in location 'eastus2'
+# It is still Apache Spark Structured Streaming — same windows, same watermark,
+# same checkpoint, same engine. pipeline/red_point_detector.py is copied in byte
+# for byte, and local mode is part of Apache Spark itself.
 #
-# Standard_D4s_v3 is the ONLY 4-vCPU SKU an Azure for Students subscription can
-# use in eastus2 (every other one is Location-restricted), so a stockout there is
-# unrecoverable. A container has no VM SKU to be out of stock.
-#
-# What does NOT change: pipeline/red_point_detector.py is copied in byte for
-# byte. This is still Apache Spark Structured Streaming — just without Databricks
-# around it.
+# A container also has no VM SKU that can run out of stock, which matters on an
+# Azure for Students subscription: in eastus2 nearly every 4-vCPU SKU is
+# Location-restricted, so a big compute node would have exactly one possible size
+# and no fallback.
 
 # Pinned by digest, not by tag: `python:3.12-slim-bookworm` is a moving target, and
 # two builds of an unchanged Dockerfile must produce the same image. Refresh with:
@@ -60,10 +58,10 @@ ENV SPARK_CONF_DIR=/opt/spark-conf
 # The `spark` user is created HERE, at the top, and not at the bottom next to USER —
 # and that ordering is load-bearing, not tidiness.
 #
-# It used to be created last, which forced a `chown -R spark:spark /opt/ivy` AFTER the
-# Ivy cache had been warmed. A recursive chown rewrites every file's metadata, and a
-# rewritten file is a NEW file to the layer diff: that single chown DUPLICATED the whole
-# 118 MB cache into a second 118 MB layer. The image carried the Ivy cache twice.
+# Create it last and it would force a `chown -R spark:spark /opt/ivy` AFTER the Ivy cache
+# is warmed. A recursive chown rewrites every file's metadata, and a rewritten file is a
+# NEW file to the layer diff: that single chown would DUPLICATE the whole 118 MB cache
+# into a second 118 MB layer, and the image would carry the Ivy cache twice.
 #
 # Creating the user while these directories are still EMPTY costs nothing, and lets the
 # warm-up below run as `spark` and write files that are already owned correctly. No
@@ -84,9 +82,9 @@ ENV SPARK_LOCAL_IP=127.0.0.1
 # --- The ADLS (ABFS) driver --------------------------------------------------
 #
 # pip-installed PySpark ships Hadoop 3.3.4 CLIENT libraries but NO Azure filesystem,
-# so `abfss://` is unusable out of the box ("No FileSystem for scheme abfss").
-# Databricks only made ADLS look free because DBR shipped these JARs. Two things need
-# it now: the optional historical archive, and — on every run — the checkpoint.
+# so `abfss://` is unusable out of the box ("No FileSystem for scheme abfss"), and the
+# JARs have to be added here. Two things need it: the optional historical archive,
+# and — on every run — the checkpoint.
 #
 # hadoop-azure MUST match the Hadoop client libraries PySpark bundles, or the driver
 # links against a Hadoop API that is not on the classpath. That is ASSERTED below, not
@@ -132,7 +130,7 @@ RUN python -c "import os; os.environ.pop('CONTAINER_ID', None); from pyspark.sql
 # own jars/ directory inside site-packages. Nothing below does.
 #
 # The switch happens BEFORE the Ivy warm-up so the cache is written by the user that
-# will read it — which is what removes the recursive chown that used to duplicate the
+# will read it — which is what avoids the recursive chown that would duplicate the
 # whole 118 MB cache into a second layer.
 USER spark
 ENV HOME=/home/spark
@@ -145,9 +143,8 @@ ENV HOME=/home/spark
 #
 # That is a SUBMIT-time config: PySpark forwards the builder's options to
 # spark-submit, which resolves the coordinate through Ivy from Maven Central EVERY
-# TIME THE JVM STARTS. On Databricks the Kafka connector shipped with the runtime
-# and this was free. In an ephemeral container it would mean a runtime dependency on
-# Maven Central, 30-60s of startup, and a detector that simply dies if Maven has a
+# TIME THE JVM STARTS. In an ephemeral container that would mean a runtime dependency
+# on Maven Central, 30-60s of startup, and a detector that simply dies if Maven has a
 # bad minute.
 #
 # So the resolution happens HERE, during the build: the JARs land in /opt/ivy and are
@@ -155,8 +152,8 @@ ENV HOME=/home/spark
 # artifacts already in the cache and resolves them offline — the coordinate is a
 # fixed revision, so Ivy never has to ask a repository what it means.
 #
-# Verified, not assumed — and now verifiable BY YOU, because the image is built here
-# instead of inside Azure:
+# Verified, not assumed — and verifiable BY YOU, because the image is built here and
+# not inside Azure:
 #
 #   make detector-image
 #   podman run --rm --network none -e ADLS_ACCOUNT=x -e ADLS_ACCOUNT_KEY=x \
@@ -182,11 +179,9 @@ RUN python -c "import os; os.environ.pop('CONTAINER_ID', None); from pyspark.sql
 # The source is copied at the very END, after every heavy layer, and that ordering is
 # the whole point of this block.
 #
-# It used to sit above the Ivy warm-up. Editing one line of the detector therefore
-# invalidated the warm-up (118 MB) and everything after it — so every detector edit
-# rebuilt and RE-PUSHED ~236 MB. That was invisible while the image was built with
-# `az acr build`, because the traffic never left Azure. Now the push leaves this
-# machine, and the cost became real and visible.
+# Put the source above the Ivy warm-up and editing one line of the detector would
+# invalidate the warm-up (118 MB) and every layer after it — so each detector edit
+# would rebuild and RE-PUSH ~236 MB over this machine's connection.
 #
 # Copied last, a detector edit invalidates these two tiny layers and nothing else: the
 # push sends kilobytes.

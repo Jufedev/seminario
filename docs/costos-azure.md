@@ -13,11 +13,11 @@ y las dos se pueden reproducir:
    2026-07-13/14. De ahí sale **qué meters se encienden de verdad** — que es la parte que
    ninguna estimación te puede dar.
 
-> ⚠️ **Corrección importante:** hasta el 2026-07-14, `README.md`, `infra/README.md` y
-> `docs/memory/11-container-detector.md` citaban precios **equivocados** — el más grave, el de
-> Event Hubs, que estaba tomado del tier **Basic** cuando el despliegue usa **Standard**. La
-> tabla de [Qué decían los docs y qué es verdad](#5-qué-decían-los-docs-y-qué-es-verdad) está al
-> final. **Este archivo es la fuente de verdad.**
+> **Este archivo es la fuente de verdad de los costos.** El `README.md` y el
+> `infra/README.md` citan estos mismos números, redondeados, para que los tengas a mano donde
+> los necesitás — pero si alguno difiere, **el que manda es este**, y hay que corregir el otro.
+> Las [tres trampas](#5-las-tres-trampas-de-este-pricing) que hacen que estos precios se citen
+> mal están en §5.
 
 Suscripción: **Azure for Students** ($100 de crédito, 12 meses). Un crédito no cambia los
 precios: se consume a **tarifa pay-as-you-go retail**. Todo lo de acá abajo es lo que se le
@@ -189,10 +189,8 @@ Esta tabla es la que **cierra tres discusiones**:
    Lo que se cobra es el throughput unit y los eventos de ingreso, nada más. Confirmado por los
    dos lados: el meter no factura, y la doc lo dice.
 2. **La IP pública cobra**, y ningún documento del repo la mencionaba. Ahí está, facturada.
-3. **El NAT gateway del 13 es el fantasma de Databricks (v1).** Cobró $0.1047 —
-   **el 25% de todo lo que gastó el proyecto en su historia** — por existir, sin procesar un byte.
-   El 14 **ya no aparece**: se fue con la migración a Container Apps. Es la validación en pesos de
-   la decisión de [`memory/11-container-detector.md`](memory/11-container-detector.md).
+3. **La línea de NAT Gateway corresponde a un recurso que el despliegue actual NO crea.** Aparece
+   únicamente en el primer día del período facturado y no vuelve a aparecer.
 
 Y lo que **no** aparece en la factura también dice algo: **Container Apps: $0.00** (la cuota
 gratis cubrió el detector completo) y **Log Analytics: $0.00** (bajo los 5 GB/mes gratis).
@@ -201,7 +199,7 @@ Desglose por día:
 
 | Día | Total | Detalle |
 |---|---|---|
-| 2026-07-13 | $0.2878 | VM 0.122 · **NAT gateway 0.105** · Event Hubs 0.033 · IP 0.026 · resto 0.002 |
+| 2026-07-13 | $0.2878 | VM 0.122 · **`Standard Gateway` 0.105** · Event Hubs 0.033 · IP 0.026 · resto 0.002 |
 | 2026-07-14 | $0.1392 | VM 0.093 · Event Hubs 0.035 · ACR 0.005 · IP 0.005 · resto 0.001 |
 
 > **Nota sobre precisión:** los datos de costo de Azure **llegan con retraso** (típicamente 8 a
@@ -211,25 +209,28 @@ Desglose por día:
 
 ---
 
-## 5. Qué decían los docs y qué es verdad
+## 5. Las tres trampas de este pricing
 
-| Afirmación en el repo (hasta 2026-07-14) | Verdad verificada | Error |
-|---|---|---|
-| Event Hubs **~$0.015/h** | **$0.0300/h** | **×2** — $0.015 es el precio del tier **Basic**; el despliegue usa **Standard**, que es el mínimo que habla Kafka. Se citó el precio del tier que el proyecto **no puede usar**. |
-| Detector **~$0.10/h** | **$0.216/h** pasada la cuota (y **$0** dentro de ella) | **×2,16** |
-| VM **~$0.126/h** | **$0.1330/h** | +5,6% |
-| Total apagado **~$0.15/h** | **$0.177/h** | +18% |
-| IP pública | **$0.005/h** | **Nunca se mencionó** — y sigue cobrando con la VM desasignada |
-| Disco de SO | **$0.0021/h** | **Nunca se mencionó** — y sigue cobrando con la VM desasignada |
-| `vm-stop` saca "lo más caro que queda" | Saca lo más caro **encendido**, pero después **Event Hubs pasa a ser el mayor gasto** del residuo | Media verdad |
-| ACR Basic ~$5/mes | $5.00/mes exacto | ✅ |
-| ~25 h gratis de detector al mes | 25,0 h exactas | ✅ |
-| `make deploy-down` = $0 | $0.00 | ✅ |
+Son las tres cosas que un lector apurado da por sentadas y que le van a costar plata.
 
-Ninguno de estos errores era una mentira: eran números escritos de memoria y **nunca
-re-verificados** contra la factura. Es exactamente el mismo patrón que
-[`memory/12-local-image-build.md`](memory/12-local-image-build.md) documenta para el "no hay
-podman en esta máquina": **una premisa se propaga por citarse, no por comprobarse.**
+**1. El tier importa, y el barato no sirve.** Event Hubs **Basic** cuesta $0.015/h por
+throughput unit — la mitad. Pero **Basic no habla el protocolo Kafka**, así que este proyecto
+no puede usarlo. El precio que aplica es el de **Standard: $0.0300/h**. Copiar el número de
+Basic porque aparece primero en la página de precios es el error más fácil de cometer.
+
+**2. Un throughput unit se paga por estar RESERVADO, no por usarse.** Event Hubs cobra sus
+$0.030/h con tráfico o sin tráfico, con el detector prendido o apagado, y **sobrevive a
+`vm-stop`**. Por eso, apenas desasignás la VM, el mayor gasto del despliegue **deja de ser la
+VM y pasa a ser Event Hubs**.
+
+**3. "Desasignar la VM" no apaga todo lo de la VM.** La **IP pública** ($0.005/h) y el **disco
+de SO** ($0.0021/h) siguen cobrando con la VM desasignada — son *almacenamiento reservado*, no
+cómputo. Son centavos, pero son los centavos que nadie ve venir porque no aparecen en ninguna
+lista de "recursos de cómputo".
+
+> **La regla que las cubre a las tres:** un precio de lista es una promesa; la factura es un
+> hecho. Cualquier número de este archivo se re-verifica con los dos comandos de abajo — no
+> se hereda de otro documento.
 
 ---
 

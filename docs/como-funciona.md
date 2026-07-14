@@ -7,9 +7,8 @@ real de un dato por nuestro código.
 No hace falta leer código para entender esto. Pero después de leerlo, el código se
 lee solo.
 
-> Referencias hermanas: [`integration-contract.md`](integration-contract.md) es el
-> contrato formal (esquemas exactos, campos, variables). [`memory/`](memory/) es la
-> bitácora de decisiones con fechas. Esta guía es el **porqué**.
+> Referencia hermana: [`integration-contract.md`](integration-contract.md) es el
+> contrato formal (esquemas exactos, campos, variables). Esta guía es el **porqué**.
 
 ---
 
@@ -394,10 +393,6 @@ validación local no probaría nada.
 
 ### 7.1 Por qué el detector NO corre en un cluster
 
-Hasta el 2026-07-13 el detector de Azure corría como un job de **Databricks**. Ya no. Y el
-motivo importa más que el cambio, porque es un error conceptual que se comete todo el
-tiempo.
-
 **Empecemos por la pregunta correcta: ¿qué hace un cluster de Spark?** Reparte el trabajo
 entre varias máquinas. Sirve cuando el volumen de datos no entra en una sola: partís los
 datos, cada worker procesa su pedazo, y hay una etapa de *shuffle* que junta los
@@ -408,45 +403,32 @@ algo que repartir**.
 cien avatares eso son **cien mensajes JSON por segundo**. Un solo core moderno hace eso
 con la mano en el bolsillo.
 
-Y en efecto: cuando fuimos a mirar el job de Databricks que estaba corriendo, la
-configuración decía
+Por eso el detector es **una sola JVM**, corriendo dentro de un **contenedor** (Azure
+Container Apps): el mismo `red_point_detector.py` que corre en la laptop, la misma
+librería (PySpark), copiado byte a byte dentro de una imagen. Nunca distribuye una tarea,
+nunca usa un worker, nunca hace un *shuffle* entre máquinas. Un cluster no le agregaría
+capacidad de cómputo: le agregaría **coordinación** que nadie le pidió.
 
-```
-num_workers  = 0
-spark.master = "local[*, 4]"
-```
+**Y esto es lo que hay que poder defender ante el jurado:** la tesis pide **Spark
+Streaming**, y esto **sigue siendo Apache Spark Structured Streaming** — las mismas
+ventanas, el mismo watermark, el mismo checkpoint, el mismo motor. Spark no deja de ser
+Spark por correr en un solo proceso: el modo local (`spark.master = local[*]`) es parte
+del propio Apache Spark, no una imitación. Lo que no hay es un intermediario comercial
+entre el código y el motor.
 
-**Cero workers. Modo local.** El detector *siempre* fue **una sola JVM**. Nunca distribuyó
-una tarea, nunca usó un worker, nunca necesitó un cluster. Databricks era un envoltorio
-caro alrededor de **un proceso Python**.
+**Lo que ese diseño compra, en concreto:**
 
-Lo descubrimos por el peor camino posible: Azure se quedó **sin stock** del tipo de máquina
-que ese cluster pedía (`CLOUD_PROVIDER_RESOURCE_STOCKOUT`) y el job simplemente **no
-arrancaba**. Buscando un plan B apareció el `num_workers = 0`, y con él la pregunta obvia:
-si es un solo proceso, **¿por qué necesita un cluster para correr?**
-
-No lo necesita. Hoy corre como un **contenedor**: el mismo `red_point_detector.py`, la misma
-JVM, la misma librería (PySpark), copiado byte a byte dentro de una imagen.
-
-**Lo que NO cambia — y esto es lo que hay que poder defender ante el jurado:** la tesis pide
-**Spark Streaming**, no Databricks. Spark en un contenedor **sigue siendo Apache Spark
-Structured Streaming**: las mismas ventanas, el mismo watermark, el mismo checkpoint, el
-mismo motor. Lo que se fue es el intermediario comercial, no la tecnología.
-
-**Lo que sí cambia, y para mejor:**
-
-| | Databricks (v1) | Contenedor (v2) |
-|---|---|---|
-| Prender / apagar | pausar el job → el cluster tarda **~5 min** en levantar | `min_replicas` 0 → 1: **segundos** |
-| Costo prendido | ~$0.60/h | ~$0.10/h (y hay una **cuota mensual gratis** que cubre ~25 h de demo) |
-| Costo apagado | un **NAT gateway** cobrando ~$0.045/h mientras el *workspace* existiera | nada |
-| Restos | un resource group que `destroy` no borraba y bloqueaba el deploy siguiente | ninguno |
+| | Contenedor |
+|---|---|
+| Prender / apagar | `min_replicas` 0 → 1: **segundos** (no minutos de arranque de cluster) |
+| Costo prendido | **$0** — la **cuota mensual gratis** de Container Apps cubre ~25 h de detector, y una demo entra ahí. Agotada la cuota, $0.216/h |
+| Costo apagado | **nada**: 0 réplicas = no hay proceso = no hay factura |
 
 > **La lección general, que vale más que el ahorro:** elegir una herramienta distribuida
 > para un problema que no es distribuido no te da escala — te da **la complejidad y las
-> restricciones de la escala, sin la escala**. Ese cluster fantasma nos costó capacidad
-> (no había máquinas), plata (el NAT gateway) y tiempo (los cinco minutos de arranque),
-> y no procesaba **ni un byte más** que un contenedor de 2 vCPU.
+> restricciones de la escala, sin la escala**: máquinas que hay que conseguir, minutos de
+> arranque y facturas de red, para no procesar **ni un byte más** que un contenedor de
+> 2 vCPU.
 
 ---
 
@@ -468,9 +450,11 @@ make deploy-down     # destruye TODO — lo único que deja el gasto en $0
 ```
 
 > **Ojo con "apagar":** `make detector-stop` apaga el **contenedor**, no el despliegue. La
-> VM, Event Hubs, el registro de imágenes y Log Analytics **siguen cobrando** (~$0.15/h en
-> total). El único comando que deja el gasto en cero es `make deploy-down`. Detalle por
-> recurso en [`../infra/README.md`](../infra/README.md).
+> VM, Event Hubs, el registro de imágenes, la IP pública y el disco **siguen cobrando**
+> ($0.177/h ≈ $4.25/día). El único comando que deja el gasto en cero es `make deploy-down`
+> — y no es un detalle: con el stack desplegado y ocioso, el crédito de $100 se agota en
+> **23 días**. Desglose verificado contra la factura en
+> [`costos-azure.md`](costos-azure.md).
 
 **Verificación de que la cadena está viva:** creás una sala, metés flotas grandes,
 generás un atasco. Al formarse la cola (≥7 detenidos ~5 s en una celda), la zona se
