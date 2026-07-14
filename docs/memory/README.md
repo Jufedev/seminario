@@ -22,13 +22,16 @@ big-data pipeline (Kafka + Spark). Grade project, Universidad ECCI (Bogotá).
 | [08-v2-integration.md](08-v2-integration.md) | v2 metaverse integration, restructure, review fixes, first tests |
 | [09-detection-tuning.md](09-detection-tuning.md) | The poisoned-checkpoint outage, the live-queue calibration, metricsOnly |
 | [10-azure-deployment.md](10-azure-deployment.md) | `sim-events` consolidation, one-command deploy, the Databricks bash-quoting trap |
+| [11-container-detector.md](11-container-detector.md) | The Databricks stockout, the `num_workers = 0` discovery, the detector moves to Container Apps |
+| [12-local-image-build.md](12-local-image-build.md) | "There is no Podman on the dev box" was false; the image is built locally with the host's engine |
 
 Each entry keeps its original date and type (decision / architecture / discovery /
 bugfix / pattern) so the reasoning behind each choice stays traceable.
 
 > **This is a log, not a description of the present.** Entries are historical: they
-> record what was decided *on that date* and are never rewritten. Some early entries
-> describe an architecture that no longer exists (the v1 Python bridge, a 6×6 zone grid)
-> — that is the point of a log. For **what is true today**, read
+> record what was decided *on that date* and are never rewritten. Some entries describe
+> an architecture that no longer exists (the v1 Python bridge, a 6×6 zone grid, the
+> Databricks detector that entry 11 replaces) — that is the point of a log. For **what is
+> true today**, read
 > [`../como-funciona.md`](../como-funciona.md) (concepts and how it works) and
 > [`../integration-contract.md`](../integration-contract.md) (the formal contract).
