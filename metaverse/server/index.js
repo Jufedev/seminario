@@ -134,6 +134,10 @@ setInterval(() => {
     room.sim.step(dt)
     if (room.sim.run !== room.lastRun) {       // corrida nueva de ESTA sala
       room.lastRun = room.sim.run
+      // Reset (o primer arranque): soltá las zonas rojas acumuladas de la sala y
+      // descartá los red-points rezagados de la ventana Spark previa al reset, para
+      // que no reaparezcan zonas fantasma sobre una sala recién reiniciada.
+      redStore.markReset(room.code)
       room.broadcast(room.sim.simInfo())
     }
     if (room.sim.infoDirty) {                  // p.ej. una oferta caducó (decisión por timeout)

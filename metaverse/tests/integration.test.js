@@ -141,6 +141,49 @@ describe('RedPointStore (red-points de Spark → zonas activas por sala)', () =>
     expect(store.activeZonesFor('ECCI-1234')).not.toContain(zone)
     expect(store.zones.has('ECCI-1234')).toBe(false) // sala sin zonas vivas → se descarta
   })
+
+  // Red-point con window_end explícito (UTC), para probar el filtro post-reset.
+  const sparkRedPointAt = (room, windowEnd) => ({
+    room, cell_x: 1, cell_y: 1, center_x: 0, center_y: 0,
+    stationary_avatars: 7, window_start: '2026-07-07 12:00:00', window_end: windowEnd,
+  })
+
+  test('markReset limpia las zonas vivas de la sala (y solo de esa sala)', () => {
+    const store = new RedPointStore({ bridge: fakeBridge() })
+    store._ingest(sparkRedPoint(0, 0, 'ECCI-1234'))
+    store._ingest(sparkRedPoint(0, 0, 'ECCI-9999'))
+    store.markReset('ECCI-1234')
+    expect(store.zones.has('ECCI-1234')).toBe(false)
+    expect(store.activeZonesFor('ECCI-9999')).toContain(zoneIndexAt(0, 0)) // la otra sala intacta
+  })
+
+  test('tras reset, un red-point de una ventana cerrada ANTES del reset se descarta', () => {
+    const store = new RedPointStore({ bridge: fakeBridge() })
+    store.markReset('ECCI-1234', Date.parse('2026-07-07T12:05:00Z'))
+    store._ingest(sparkRedPointAt('ECCI-1234', '2026-07-07 12:04:30')) // ventana previa al reset
+    expect(store.activeZonesFor('ECCI-1234')).toHaveLength(0)
+  })
+
+  test('tras reset, una detección NUEVA (ventana posterior) sí activa su zona', () => {
+    const store = new RedPointStore({ bridge: fakeBridge() })
+    store.markReset('ECCI-1234', Date.parse('2026-07-07T12:05:00Z'))
+    store._ingest(sparkRedPointAt('ECCI-1234', '2026-07-07 12:05:30')) // ventana posterior al reset
+    expect(store.activeZonesFor('ECCI-1234')).toContain(zoneIndexAt(0, 0))
+  })
+
+  test('el reset es por sala: no descarta red-points de otra sala', () => {
+    const store = new RedPointStore({ bridge: fakeBridge() })
+    store.markReset('ECCI-1234', Date.parse('2026-07-07T12:05:00Z'))
+    store._ingest(sparkRedPointAt('ECCI-9999', '2026-07-07 12:04:30')) // vieja, pero de OTRA sala
+    expect(store.activeZonesFor('ECCI-9999')).toContain(zoneIndexAt(0, 0))
+  })
+
+  test('window_end ilegible no descarta (fail-open: mejor un fantasma que perder detecciones)', () => {
+    const store = new RedPointStore({ bridge: fakeBridge() })
+    store.markReset('ECCI-1234', Date.now())
+    store._ingest(sparkRedPointAt('ECCI-1234', 'no-es-fecha'))
+    expect(store.activeZonesFor('ECCI-1234')).toContain(zoneIndexAt(0, 0))
+  })
 })
 
 describe('KafkaBridge (topics internos consolidados en sim-events)', () => {

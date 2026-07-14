@@ -206,6 +206,15 @@ def main() -> None:
             "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1",
         )
         .config("spark.sql.shuffle.partitions", "4")
+        # Pin the session time zone to UTC so window_start/window_end render as UTC
+        # regardless of the host clock. Without this, casting the window timestamps to
+        # string uses the JVM's local zone: on a UTC host (the Azure container) that is
+        # harmless, but on a local dev box in another zone the emitted window_end would be
+        # wall-clock-local while the server's `ts` and every downstream consumer assume UTC.
+        # The metaverse's red-point store parses window_end as UTC (redPoints.js), so a
+        # non-UTC render would shift it by the host offset and mis-order it against reset
+        # timestamps. UTC everywhere keeps the event-time contract unambiguous.
+        .config("spark.sql.session.timeZone", "UTC")
         .getOrCreate()
     )
     spark.sparkContext.setLogLevel("WARN")
@@ -254,6 +263,23 @@ def main() -> None:
         f"min_mean_dwell={MIN_MEAN_DWELL_S}s, "
         f"window={WINDOW_DURATION}, slide={WINDOW_SLIDE})"
     )
+
+    # Loud warning for the silent misalignment trap: origin (0,0) is the square-cell
+    # fallback nobody calibrated to. The real calibration (origin -240,-195) is only
+    # injected via env by the Makefile/deploy, so a bare `python red_point_detector.py`
+    # runs with these defaults and paints red zones offset from the overlay, with no
+    # error. Warn (do not exit) so whoever knows what they are doing can still run bare.
+    if GRID_ORIGIN_X == 0 and GRID_ORIGIN_Y == 0:
+        print(
+            "\n"
+            "  ########################################################################\n"
+            "  #  WARNING: grid origin is at (0,0) — the UNCALIBRATED fallback.        #\n"
+            "  #  This happens when the env profile was NOT loaded. Red zones will be  #\n"
+            "  #  MISALIGNED from the metaverse overlay (real origin is -240,-195).    #\n"
+            "  #  Run via `make detector`, or set GRID_ORIGIN_X/GRID_ORIGIN_Y and      #\n"
+            "  #  CELL_SIZE_X/CELL_SIZE_Y before launching.                            #\n"
+            "  ########################################################################\n"
+        )
 
     # Optional historical archiving: append the raw parsed positions feed to
     # Parquet (local dir in dev, abfss:// ADLS path in prod). Env-driven, so the

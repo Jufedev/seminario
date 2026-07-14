@@ -179,6 +179,16 @@ input[type="range"] {
 .sim-metrics .row { display: flex; justify-content: space-between; font-size: 12px; }
 .sim-metrics .row .k { color: var(--text-dim); }
 .sim-metrics .row .v { font-weight: 700; }
+.sim-metrics-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.sim-metrics-body { display: flex; flex-direction: column; gap: 4px; }
+.metrics-toggle {
+  border: 1px solid var(--panel-border); background: rgba(255,255,255,0.08); color: var(--text-dim);
+  border-radius: 6px; padding: 2px 9px; font-size: 12px; line-height: 1; cursor: pointer;
+}
+.metrics-toggle:hover { background: rgba(255,255,255,0.16); }
+/* Colapsado: solo queda la barra del título; el cuerpo se oculta para despejar el mapa. */
+.sim-metrics.collapsed { min-width: 0; }
+.sim-metrics.collapsed .sim-metrics-body { display: none; }
 
 /* ── Dashboard de analítica (Vista 3) ── */
 .dash-fab {

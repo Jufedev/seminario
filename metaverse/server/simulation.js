@@ -303,6 +303,10 @@ export class Simulation {
 
   control(action) {
     if (action === 'start') this.running = true
+    // INTENCIONAL: en pausa las zonas rojas se apagan solas en ~15s. Al pausar,
+    // index.js deja de muestrear posiciones (maybeSampleAvatarPositions solo corre
+    // con la sala en marcha), Spark deja de re-emitir y las zonas mueren por TTL.
+    // Es correcto: nada se mueve, no hay congestión viva que detectar. No es un bug.
     else if (action === 'pause') this.running = false
     else if (action === 'reset') this._reset()
     else return false

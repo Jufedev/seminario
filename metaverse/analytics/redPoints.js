@@ -47,8 +47,22 @@ export class RedPointStore {
     // Zonas rojas POR SALA: roomKey → Map<índice de zona, epoch ms de expiración>.
     // La clave GLOBAL_ROOM_KEY agrupa los red-points sin sala (los ven todas).
     this.zones = new Map()
+    // Reset POR SALA: roomCode → epoch ms del reset. Sirve para descartar los
+    // red-points de ventanas que se cerraron ANTES del reset (ver _ingest y
+    // markReset): tras un reset, Spark sigue emitiendo desde su ventana ya
+    // abierta (armada con posiciones previas) por ~ventana+watermark.
+    this.resetAt = new Map()
     this.mode = 'local'
     this.consumed = 0
+  }
+
+  // El admin reinició la sala: (a) soltamos sus zonas vivas acumuladas y (b)
+  // anotamos el instante del reset para descartar los red-points rezagados de
+  // ventanas previas (Spark las sigue emitiendo hasta ~ventana+watermark). Es
+  // POR SALA: no toca la clave global ni las demás salas.
+  markReset(roomCode, resetAt = Date.now()) {
+    this.zones.delete(roomCode)
+    this.resetAt.set(roomCode, resetAt)
   }
 
   async start() {
@@ -113,6 +127,17 @@ export class RedPointStore {
     if (!Number.isFinite(cx) || !Number.isFinite(cy)) return
     const zone = zoneIndexAt(cx, cy)
     const key = e.room ?? GLOBAL_ROOM_KEY   // sin sala → clave global (la ven todas)
+    // Post-reset: descartar los red-points de ventanas cerradas ANTES del reset de
+    // ESTA sala (no la global: el reset es por sala). window_end viene como
+    // "2026-07-07 12:00:30" y es UTC — el detector fija spark.sql.session.timeZone=UTC
+    // justamente para que no dependa del reloj del host (ver red_point_detector.py). Por
+    // eso agregamos 'Z'. Fail-open: si no parsea a un número finito, NO descartamos
+    // (mejor un fantasma raro que perder detecciones).
+    const resetAt = this.resetAt.get(key)
+    if (resetAt != null) {
+      const windowEnd = Date.parse(String(e.window_end).replace(' ', 'T') + 'Z')
+      if (Number.isFinite(windowEnd) && windowEnd < resetAt) return
+    }
     let roomZones = this.zones.get(key)
     if (!roomZones) { roomZones = new Map(); this.zones.set(key, roomZones) }
     roomZones.set(zone, Date.now() + TTL_MS)

@@ -25,24 +25,29 @@ export function renderAdminView(app) {
     </div>
     <div class="sim-topbar">
       <div class="panel sim-metrics">
-        <h3>👑 Admin · ${session.name}</h3>
-        <div class="row"><span class="k">Tick servidor</span><span class="v" id="r-tick">—</span></div>
-        <div class="row"><span class="k">Mundo (salieron / llegaron)</span><span class="v" id="r-counts">0 / 0</span></div>
-        <div class="row"><span class="k">Estado</span><span class="v" id="r-running">—</span></div>
-        <div class="slider-row" style="margin-top:10px">
-          <div class="head"><span>Frecuencia de incidentes</span><b id="lbl-freq">cada ~10s</b></div>
-          <input type="range" id="sl-freq" min="3" max="60" value="10" />
+        <div class="sim-metrics-head">
+          <h3>👑 Admin · ${session.name}</h3>
+          <button id="metrics-toggle" class="metrics-toggle" title="Colapsar / expandir el panel (despeja el mapa)">▾</button>
         </div>
-        <div class="admin-controls">
-          <button class="btn secondary" id="btn-start">▶️ Iniciar</button>
-          <button class="btn secondary" id="btn-pause">⏸️ Pausar</button>
-          <button class="btn secondary" id="btn-reset">🔄 Reiniciar</button>
+        <div class="sim-metrics-body">
+          <div class="row"><span class="k">Tick servidor</span><span class="v" id="r-tick">—</span></div>
+          <div class="row"><span class="k">Mundo (salieron / llegaron)</span><span class="v" id="r-counts">0 / 0</span></div>
+          <div class="row"><span class="k">Estado</span><span class="v" id="r-running">—</span></div>
+          <div class="slider-row" style="margin-top:10px">
+            <div class="head"><span>Frecuencia de incidentes</span><b id="lbl-freq">cada ~10s</b></div>
+            <input type="range" id="sl-freq" min="3" max="60" value="10" />
+          </div>
+          <div class="admin-controls">
+            <button class="btn secondary" id="btn-start">▶️ Iniciar</button>
+            <button class="btn secondary" id="btn-pause">⏸️ Pausar</button>
+            <button class="btn secondary" id="btn-reset">🔄 Reiniciar</button>
+          </div>
+          <h3 style="margin-top:10px">Flotas de la sala</h3>
+          <div id="r-fleets" class="hud-members">— sin flotas configuradas —</div>
+          <div id="r-alerts" class="admin-alerts"></div>
+          <h3 style="margin-top:10px">En la sala</h3>
+          <div id="r-members" class="hud-members">—</div>
         </div>
-        <h3 style="margin-top:10px">Flotas de la sala</h3>
-        <div id="r-fleets" class="hud-members">— sin flotas configuradas —</div>
-        <div id="r-alerts" class="admin-alerts"></div>
-        <h3 style="margin-top:10px">En la sala</h3>
-        <div id="r-members" class="hud-members">—</div>
       </div>
       <div style="display:flex;flex-direction:column;gap:8px;align-items:flex-end">
         <button class="btn secondary" id="btn-leave">← Salir de la sala</button>
@@ -113,6 +118,16 @@ export function renderAdminView(app) {
   view.querySelector('#btn-start').addEventListener('click', () => session.socket.send({ type: 'admin_control', action: 'start' }))
   view.querySelector('#btn-pause').addEventListener('click', () => session.socket.send({ type: 'admin_control', action: 'pause' }))
   view.querySelector('#btn-reset').addEventListener('click', () => session.socket.send({ type: 'admin_control', action: 'reset' }))
+
+  // Colapsar el panel de métricas: se ubica arriba-IZQUIERDA, justo donde se
+  // arman las colas (cerca de los spawns), así que tapa las zonas rojas que el
+  // admin está mostrando. Colapsado deja solo la barra del título → mapa libre.
+  const simMetrics = view.querySelector('.sim-metrics')
+  const metricsToggle = view.querySelector('#metrics-toggle')
+  metricsToggle.addEventListener('click', () => {
+    const collapsed = simMetrics.classList.toggle('collapsed')
+    metricsToggle.textContent = collapsed ? '▸' : '▾'
+  })
 
   // ── Estado que llega del servidor ──
   function showSimInfo(m) {
