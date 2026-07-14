@@ -38,8 +38,9 @@ locals {
   #   1. Editing the detector or the Dockerfile changes the tag, so the Container
   #      App's image reference changes, so Container Apps rolls a new revision.
   #      A mutable `:latest` would have left the old code running.
-  #   2. Nothing changed -> same tag -> `az acr build` is not re-run and no new
-  #      revision is created. Re-applying is free.
+  #   2. Nothing changed -> same tag -> the image is not rebuilt or re-pushed, and no
+  #      new revision is created. Re-applying is free. That property is worth more now
+  #      that the push leaves this machine: an unchanged detector sends nothing.
   detector_image_tag = substr(sha256(join("", [
     filesha256("${path.module}/../pipeline/Dockerfile"),
     filesha256("${path.module}/../pipeline/red_point_detector.py"),
@@ -153,10 +154,24 @@ resource "azurerm_container_registry" "detector" {
 # would leave a bare `terraform apply` (or `make infra-apply`) permanently broken,
 # because it would try to create the Container App with no image behind it.
 #
-# The build itself runs `az acr build`, which uploads the context and builds it
-# INSIDE Azure. That is not a stylistic choice: there is no Docker or Podman on
-# the dev box, and the project already rejected Docker-inside-distrobox as too
-# fragile to rely on. The only build engine we have is the one in the cloud.
+# The build itself runs LOCALLY (scripts/build-detector-image.sh: podman build, then
+# push to the registry). It used to be `az acr build`, which uploaded the context and
+# built it inside Azure, and the justification was "there is no Docker or Podman on the
+# dev box".
+#
+# That justification was FALSE, and instructively so: this project's distrobox is itself
+# run by the HOST's Podman. The engine was always there, one hop away — the box just
+# could not see it. The script reaches it with distrobox-host-exec.
+#
+# Building here means the image can be run and smoke-tested before it ever reaches Azure
+# (`make detector-image`), and the build stops depending on an Azure-side build agent.
+# The cost, stated plainly: the first push sends ~450 MB from this machine instead of a
+# ~20 KB context. Later pushes only send the layers the registry does not have.
+#
+# NOT podman inside the box: rootless Podman-in-Podman has no overlay-on-overlay and
+# falls back to the `vfs` storage driver, which copies the entire filesystem per layer.
+# The project already rejected Docker-inside-distrobox as too fragile; that would be the
+# same mistake with a different binary.
 resource "terraform_data" "detector_image" {
   # Re-runs only when the image content changes (the tag IS the content hash).
   triggers_replace = {
@@ -164,14 +179,15 @@ resource "terraform_data" "detector_image" {
   }
 
   provisioner "local-exec" {
-    # `az` is already a hard requirement of the deployment (scripts/deploy-azure.sh
-    # checks for it and for an active login in its preflight).
+    # `az` is still a hard requirement: the registry has no admin user, so the push
+    # authenticates with a short-lived ARM token (`az acr login --expose-token`).
+    # scripts/deploy-azure.sh checks for `az` and for an active login in its preflight.
     command = <<-CMD
-      az acr build \
-        --registry ${azurerm_container_registry.detector.name} \
-        --image red-point-detector:${local.detector_image_tag} \
-        --file ${abspath("${path.module}/../pipeline/Dockerfile")} \
-        --platform linux/amd64 \
+      ${abspath("${path.module}/../scripts/build-detector-image.sh")} \
+        ${azurerm_container_registry.detector.name} \
+        ${azurerm_container_registry.detector.login_server} \
+        ${local.detector_image_tag} \
+        ${abspath("${path.module}/../pipeline/Dockerfile")} \
         ${abspath("${path.module}/../pipeline")}
     CMD
   }

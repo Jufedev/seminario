@@ -88,11 +88,43 @@ Dimensionado: **2 vCPU / 4 GiB** (Consumption exige 2 GiB por vCPU), `max_replic
 `revision_mode = "Single"` — la consulta tiene estado y es de un solo nodo: una segunda réplica
 sería un segundo detector emitiendo los mismos puntos rojos.
 
-### La imagen se construye DENTRO de Azure (`az acr build`)
+### La imagen se construye ACÁ, con el podman del host
 
-**En esta caja no hay Docker ni Podman**, y el proyecto ya descartó Docker-dentro-de-distrobox
-por frágil. El único motor de build que tenemos es el de la nube: `az acr build` sube el
-contexto y lo construye en el registro.
+Hasta el 2026-07-13 la imagen se construía con `az acr build`, o sea **dentro de Azure**, y el
+motivo declarado era: *"en esta caja no hay Docker ni Podman"*.
+
+**Era falso, y vale la pena entender por qué.** Es cierto que dentro de la distrobox no hay
+podman — pero **esta distrobox la corre el podman del host**. El motor de build siempre estuvo
+ahí, a un salto de distancia: la caja simplemente no lo veía. `distrobox-host-exec` lo alcanza.
+
+```
+distrobox (Ubuntu 24.04)  ──distrobox-host-exec──►  podman del host (Fedora)
+  terraform, az, make                                  build + push
+```
+
+**Podman va en el HOST, no adentro de la caja.** Podman-dentro-de-podman rootless no tiene
+overlay-sobre-overlay, así que cae al driver de almacenamiento `vfs`, que **copia el filesystem
+entero por capa**: para una imagen de Spark de ~1 GB eso es lento y voraz. El proyecto ya
+descartó Docker-dentro-de-distrobox por frágil; hacerlo con podman sería el mismo error con otro
+binario.
+
+**Lo que ganamos** — y es lo que justifica el cambio, no el gusto:
+
+- La imagen se puede **correr y probar antes de que toque Azure**: `make detector-image` la
+  construye sin push, sin registro y sin sesión de Azure.
+- Se pudo **verificar la afirmación central del Dockerfile**, que hasta ahora era un acto de fe:
+  corriendo la imagen con `--network none`, Ivy resuelve el conector de Kafka **desde la caché
+  horneada** y el detector arranca igual. Con el build adentro de Azure eso no era comprobable.
+- El build deja de depender de un agente de build del lado de Azure.
+
+**Lo que cuesta, dicho sin maquillaje:** `az acr build` subía un contexto de ~20 KB y hacía el
+trabajo pesado en la red de Azure. Ahora el primer push manda **~450 MB comprimidos** desde esta
+máquina (la imagen pesa 951 MB). Los push siguientes solo mandan las capas que al registro le
+faltan.
+
+El registro **no tiene admin user**, así que el push se autentica con un **token ARM de vida
+corta** (`az acr login --expose-token`), que viaja por **stdin** y nunca aparece en `ps`. Por eso
+`az` sigue siendo un requisito duro del deploy.
 
 La construcción es un **nodo de Terraform** (`terraform_data.detector_image`), no un paso del
 script, para que el orden sea una **dependencia real**:
@@ -110,8 +142,9 @@ el apply completo) se descartó: dejaría un `terraform apply` pelado —o un `m
 
 1. Si editás el detector, cambia el tag → Container Apps despliega una **revisión nueva**. Un
    `:latest` mutable habría dejado corriendo el código viejo.
-2. Si no cambió nada, mismo tag → `az acr build` **no reconstruye** y no hay revisión nueva.
-   Re-aplicar es gratis.
+2. Si no cambió nada, mismo tag → **no se reconstruye ni se re-empuja** y no hay revisión nueva.
+   Re-aplicar es gratis. Esa propiedad vale más ahora que el push sale de tu conexión: un
+   detector sin cambios no manda un byte.
 
 El registro **no tiene admin user**: la Container App baja la imagen con una **identidad
 administrada** (user-assigned, no system-assigned — una system-assigned recién existe *después*
@@ -255,8 +288,12 @@ Cuotas por familia: `az vm list-usage -l eastus2 -o table`.
 ## Requisitos
 
 - Terraform >= 1.5 (o OpenTofu)
-- Azure CLI autenticado: `az login` — **también lo usa el `apply`** para construir la imagen
-  del detector (`az acr build`)
+- Azure CLI autenticado: `az login` — **también lo usa el `apply`**, para sacar el token con el
+  que se empuja la imagen del detector al registro
+- **Podman (o Docker)**: el `apply` construye la imagen del detector. Se busca primero dentro de
+  la caja y después **en el host**, vía `distrobox-host-exec` — que es donde normalmente está,
+  porque es el mismo motor que corre esta distrobox. El preflight de `make deploy` lo verifica
+  antes de gastar un centavo.
 - Suscripción activa (Azure for Students)
 - **El repositorio debe ser público**: cloud-init lo clona por HTTPS sin
   credenciales para desplegar la app en la VM (o pasar `repo_url` con token).
@@ -270,6 +307,7 @@ raíz del repo). El script no reemplaza a Terraform: lo orquesta, y todo lo que
 crea es declarativo.
 
 ```bash
+make detector-image    # construye la imagen del detector LOCAL: sin push, sin Azure
 make deploy            # infra + app en la VM + contenedor del detector (creado APAGADO)
 make detector-start    # detector ON  — 1 réplica: levanta en segundos
 make deploy-status     # IP, web, VM, réplicas del detector y salud de sus revisiones
@@ -279,10 +317,10 @@ make deploy-down       # terraform destroy de todo (lo único que deja el gasto 
 
 `make deploy` hace, en orden:
 
-1. **Preflight**: `az login` activo; el repo es **público** y tu HEAD está
-   **pusheado** (cloud-init clona GitHub anónimamente — si el repo es privado la
-   VM arranca vacía, y si no pusheaste despliega código viejo, en ambos casos con
-   el `apply` en verde).
+1. **Preflight**: `az login` activo; **hay podman o docker** (en la caja o en el host);
+   el repo es **público** y tu HEAD está **pusheado** (cloud-init clona GitHub
+   anónimamente — si el repo es privado la VM arranca vacía, y si no pusheaste
+   despliega código viejo, en ambos casos con el `apply` en verde).
 2. **Guard del kill-switch**: aborta si el kill-switch disparó (ver abajo).
 3. Genera `infra/terraform.tfvars` (email del presupuesto, llave SSH — la crea si
    no existe, `repo_url` derivado de tu `origin`). Se escribe **una sola vez**.
@@ -290,8 +328,9 @@ make deploy-down       # terraform destroy de todo (lo único que deja el gasto 
    `env/env.prod.example`, la **fuente única de verdad** compartida con el overlay del
    metaverso. Si cambió la ventana, **avisa** (el checkpoint viejo es incompatible).
 5. `terraform apply` en `infra/` — **una sola etapa**. El apply también **construye la
-   imagen** del detector con `az acr build` (~4 min la primera vez) y crea la Container App
-   **apagada** (`min_replicas = 0`).
+   imagen** del detector con el podman del host y la **empuja** al registro (~4 min de build
+   + ~450 MB de push la primera vez; después solo las capas que cambian) y crea la Container
+   App **apagada** (`min_replicas = 0`).
 6. Escribe `.env.azure` (perfil listo para correr el detector/metaverso local
    contra Azure: `cp .env.azure .env`).
 7. Espera a que cloud-init termine y la web responda 200 (~5 min).
@@ -524,8 +563,9 @@ Consultar la guía de Terraform en la documentación de Floci para el detalle
 de autenticación en modo dev. Verificar qué recursos soporta el emulador:
 Event Hubs y Storage están listados; **Container Apps, ACR, VM y Consumption Budget
 probablemente NO** — si el `apply` falla en esos recursos contra Floci, es
-esperado (se validan solo contra Azure real con `terraform plan`). El `az acr build` del
-detector tampoco tiene sentido contra el emulador.
+esperado (se validan solo contra Azure real con `terraform plan`). El push de la imagen del
+detector tampoco tiene sentido contra el emulador — pero el **build** sí corre sin Azure de por
+medio: `make detector-image`.
 
 ## Destruir todo
 

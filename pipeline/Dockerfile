@@ -48,72 +48,38 @@ RUN pip install --no-cache-dir pyspark==3.5.1
 # Spark reads spark-defaults.conf from SPARK_CONF_DIR at every JVM start, both at
 # build time and at run time. Two settings are written here at build:
 #
-#   spark.jars.ivy      pins the Ivy home to a known path instead of $HOME/.ivy2,
-#                       so the cache warmed below is the same one the runtime reads
-#                       — the build runs as root and the detector runs as `spark`,
-#                       so a HOME-relative cache would simply be missed.
+#   spark.jars.ivy      pins the Ivy home to a known path instead of $HOME/.ivy2, so the
+#                       cache warmed below is the same one the runtime reads.
 #   spark.driver.memory in local mode the driver IS the whole engine, and Spark's
 #                       1g default wastes most of the 4 GiB the container gets.
 #
 # entrypoint.sh appends the ADLS storage key to this same file at start-up. None of
 # these are set by red_point_detector.py, so nothing here fights the code.
 ENV SPARK_CONF_DIR=/opt/spark-conf
-RUN mkdir -p /opt/spark-conf /opt/ivy \
-    && printf 'spark.jars.ivy /opt/ivy\nspark.driver.memory 2g\n' > /opt/spark-conf/spark-defaults.conf
+
+# The `spark` user is created HERE, at the top, and not at the bottom next to USER —
+# and that ordering is load-bearing, not tidiness.
+#
+# It used to be created last, which forced a `chown -R spark:spark /opt/ivy` AFTER the
+# Ivy cache had been warmed. A recursive chown rewrites every file's metadata, and a
+# rewritten file is a NEW file to the layer diff: that single chown DUPLICATED the whole
+# 118 MB cache into a second 118 MB layer. The image carried the Ivy cache twice.
+#
+# Creating the user while these directories are still EMPTY costs nothing, and lets the
+# warm-up below run as `spark` and write files that are already owned correctly. No
+# recursive chown, no duplicate layer, ~118 MB off the image.
+#
+# 0700 on the conf dir because that is where entrypoint.sh lands the ADLS key.
+RUN useradd --create-home --uid 10001 spark \
+    && mkdir -p /opt/spark-conf /opt/ivy \
+    && printf 'spark.jars.ivy /opt/ivy\nspark.driver.memory 2g\n' > /opt/spark-conf/spark-defaults.conf \
+    && chown -R spark:spark /opt/spark-conf /opt/ivy \
+    && chmod 0700 /opt/spark-conf
 
 # Spark local mode binds the driver to whatever the hostname resolves to. In a
 # container that lookup is the classic startup failure ("Service 'sparkDriver'
 # could not bind..."), and the driver has nothing to serve to anyone anyway.
 ENV SPARK_LOCAL_IP=127.0.0.1
-
-WORKDIR /app
-COPY red_point_detector.py /app/red_point_detector.py
-COPY entrypoint.sh /app/entrypoint.sh
-
-# --- The Ivy cache, warmed at BUILD time (the point of this whole file) -------
-#
-# red_point_detector.py sets:
-#
-#   spark.jars.packages = org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1
-#
-# That is a SUBMIT-time config: PySpark forwards the builder's options to
-# spark-submit, which resolves the coordinate through Ivy from Maven Central EVERY
-# TIME THE JVM STARTS. On Databricks the Kafka connector shipped with the runtime
-# and this was free. In an ephemeral container it would mean a runtime dependency on
-# Maven Central, 30-60s of startup, and a detector that simply dies if Maven has a
-# bad minute.
-#
-# So the resolution happens HERE, during the build: the JARs land in /opt/ivy and are
-# baked into the image layer. At run time Ivy finds the module descriptor and the
-# artifacts already in the cache and resolves them offline — the coordinate is a
-# fixed revision, so Ivy never has to ask a repository what it means.
-#
-# Verified rather than assumed: with a cold cache and no route to Maven Central the
-# session FAILS; with this cache warmed and the same dead network it starts and
-# reports the connector on its classpath.
-#
-# The ARG is asserted against the detector source first. If someone bumps the
-# connector version in the .py and not here, the cache would be warmed for a package
-# nobody asks for and the runtime would silently go back to downloading from the
-# internet — so the build fails loudly instead.
-ARG SPARK_KAFKA_PACKAGE=org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1
-
-RUN if ! grep -qF "$SPARK_KAFKA_PACKAGE" /app/red_point_detector.py; then \
-    echo "BUILD ABORTED: red_point_detector.py does not declare $SPARK_KAFKA_PACKAGE." >&2; \
-    echo "Update SPARK_KAFKA_PACKAGE so the cache is warmed for the package the detector really resolves." >&2; \
-    exit 1; \
-    fi
-
-# `os.environ.pop("CONTAINER_ID")` is not paranoia and not copy-paste: it is the same
-# guard main() opens with. Some container runtimes (distrobox, where this project is
-# developed) export CONTAINER_ID, Spark reads it as "I am running inside a YARN
-# container" and dies with "Yarn Local dirs can't be empty" before it ever starts. The
-# build must not inherit that from whatever agent it happens to run on.
-RUN python -c "import os; os.environ.pop('CONTAINER_ID', None); from pyspark.sql import SparkSession; SparkSession.builder.appName('ivy-warmup').master('local[1]').config('spark.jars.packages', '${SPARK_KAFKA_PACKAGE}').getOrCreate().stop()" \
-    && if ! ls -R /opt/ivy | grep -q 'spark-sql-kafka'; then \
-    echo "BUILD ABORTED: the warm-up left no Kafka connector in /opt/ivy — the runtime would go back to downloading it from Maven Central on every start." >&2; \
-    exit 1; \
-    fi
 
 # --- The ADLS (ABFS) driver --------------------------------------------------
 #
@@ -161,21 +127,90 @@ RUN SPARK_HOME="$(python -c 'import pyspark, pathlib; print(pathlib.Path(pyspark
 # front of the class instead of here.
 RUN python -c "import os; os.environ.pop('CONTAINER_ID', None); from pyspark.sql import SparkSession; s = SparkSession.builder.appName('abfs-check').master('local[1]').getOrCreate(); k = s._jvm.org.apache.hadoop.fs.FileSystem.getFileSystemClass('abfss', s._jsc.hadoopConfiguration()); assert 'AzureBlobFileSystem' in k.getName(), k.getName(); print('ABFS driver OK:', k.getName()); s.stop()"
 
-# --- Runtime ----------------------------------------------------------------
+# --- Least privilege, from here down ----------------------------------------
+# Everything above needed root: apt, pip, and dropping the ABFS jars into PySpark's
+# own jars/ directory inside site-packages. Nothing below does.
+#
+# The switch happens BEFORE the Ivy warm-up so the cache is written by the user that
+# will read it — which is what removes the recursive chown that used to duplicate the
+# whole 118 MB cache into a second layer.
+USER spark
+ENV HOME=/home/spark
 
+# --- The Ivy cache, warmed at BUILD time (the point of this whole file) -------
+#
+# red_point_detector.py sets:
+#
+#   spark.jars.packages = org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1
+#
+# That is a SUBMIT-time config: PySpark forwards the builder's options to
+# spark-submit, which resolves the coordinate through Ivy from Maven Central EVERY
+# TIME THE JVM STARTS. On Databricks the Kafka connector shipped with the runtime
+# and this was free. In an ephemeral container it would mean a runtime dependency on
+# Maven Central, 30-60s of startup, and a detector that simply dies if Maven has a
+# bad minute.
+#
+# So the resolution happens HERE, during the build: the JARs land in /opt/ivy and are
+# baked into the image layer. At run time Ivy finds the module descriptor and the
+# artifacts already in the cache and resolves them offline — the coordinate is a
+# fixed revision, so Ivy never has to ask a repository what it means.
+#
+# Verified, not assumed — and now verifiable BY YOU, because the image is built here
+# instead of inside Azure:
+#
+#   make detector-image
+#   podman run --rm --network none -e ADLS_ACCOUNT=x -e ADLS_ACCOUNT_KEY=x \
+#     red-point-detector:local
+#
+# With no route to Maven Central it still reports the connector resolved from
+# /opt/ivy/cache and reaches "Red-point detector running" (it then dies on the Kafka
+# timeout, correctly — there is no broker).
+ARG SPARK_KAFKA_PACKAGE=org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1
+
+# `os.environ.pop("CONTAINER_ID")` is not paranoia and not copy-paste: it is the same
+# guard main() opens with. Some container runtimes (distrobox, where this project is
+# developed) export CONTAINER_ID, Spark reads it as "I am running inside a YARN
+# container" and dies with "Yarn Local dirs can't be empty" before it ever starts. The
+# build must not inherit that from whatever agent it happens to run on.
+RUN python -c "import os; os.environ.pop('CONTAINER_ID', None); from pyspark.sql import SparkSession; SparkSession.builder.appName('ivy-warmup').master('local[1]').config('spark.jars.packages', '${SPARK_KAFKA_PACKAGE}').getOrCreate().stop()" \
+    && if ! ls -R /opt/ivy | grep -q 'spark-sql-kafka'; then \
+    echo "BUILD ABORTED: the warm-up left no Kafka connector in /opt/ivy — the runtime would go back to downloading it from Maven Central on every start." >&2; \
+    exit 1; \
+    fi
+
+# --- The detector itself, LAST ----------------------------------------------
+# The source is copied at the very END, after every heavy layer, and that ordering is
+# the whole point of this block.
+#
+# It used to sit above the Ivy warm-up. Editing one line of the detector therefore
+# invalidated the warm-up (118 MB) and everything after it — so every detector edit
+# rebuilt and RE-PUSHED ~236 MB. That was invisible while the image was built with
+# `az acr build`, because the traffic never left Azure. Now the push leaves this
+# machine, and the cost became real and visible.
+#
+# Copied last, a detector edit invalidates these two tiny layers and nothing else: the
+# push sends kilobytes.
+#
 # Unbuffered: the detector's print() lines are how you watch it come up in the
 # Container Apps log stream. Buffered, they would arrive minutes late or never.
 ENV PYTHONUNBUFFERED=1
 
-# Least privilege: the detector is a background worker with no ingress. It needs to
-# write the Ivy resolution cache and its own Spark conf (entrypoint.sh appends the
-# storage key to it at start-up) and nothing else. 0700 on the conf dir because that
-# is where the ADLS key lands.
-RUN useradd --create-home --uid 10001 spark \
-    && chown -R spark:spark /opt/ivy /opt/spark-conf \
-    && chmod 0700 /opt/spark-conf \
+WORKDIR /app
+COPY --chown=spark:spark red_point_detector.py /app/red_point_detector.py
+COPY --chown=spark:spark entrypoint.sh /app/entrypoint.sh
+
+# The connector coordinate is asserted against the detector SOURCE. If someone bumps
+# the version in the .py and not in SPARK_KAFKA_PACKAGE, the cache above would be warmed
+# for a package nobody asks for and the runtime would silently go back to downloading
+# from Maven Central on every start — so the build fails loudly instead.
+#
+# It runs here, at the end, because that is where the source now is. It costs a late
+# failure on a rare mistake, and buys a detector edit that re-pushes kilobytes.
+RUN if ! grep -qF "$SPARK_KAFKA_PACKAGE" /app/red_point_detector.py; then \
+    echo "BUILD ABORTED: red_point_detector.py does not declare $SPARK_KAFKA_PACKAGE." >&2; \
+    echo "Update SPARK_KAFKA_PACKAGE so the cache is warmed for the package the detector really resolves." >&2; \
+    exit 1; \
+    fi \
     && chmod +x /app/entrypoint.sh
-USER spark
-ENV HOME=/home/spark
 
 ENTRYPOINT ["/app/entrypoint.sh"]

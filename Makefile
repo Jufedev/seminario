@@ -32,6 +32,7 @@ GRID_ORIGIN_Y ?= -195
         detector \
         metaverse-install metaverse-test metaverse-server metaverse-web \
         deploy detector-start detector-stop deploy-status deploy-down \
+        detector-image \
         infra-init infra-plan infra-apply \
         docker-kafka-up docker-kafka-down clean
 
@@ -103,12 +104,18 @@ dev: ## Bring up the WHOLE local loop with one command (Kafka+detector+server+we
 # deploy is the whole thing (infra + app on the VM + the detector container); the
 # infra-* targets are the escape hatch for driving Terraform by hand.
 #
-# ONE Terraform stage. The apply also BUILDS the detector image, with `az acr build`
-# (inside Azure — there is no Docker on this box), because the Container App cannot
-# reference an image that does not exist yet. See infra/detector.tf.
+# ONE Terraform stage. The apply also BUILDS the detector image — locally, with the
+# HOST's podman (reached through distrobox-host-exec) — and pushes it, because the
+# Container App cannot reference an image that does not exist yet. See infra/detector.tf.
 
 deploy: ## Deploy EVERYTHING to Azure (infra + app VM + the detector container)
 	./scripts/deploy-azure.sh up
+
+# Build the image WITHOUT pushing it or touching Azure. This is what building locally
+# actually buys: the detector image can be inspected and run before a single credit is
+# spent. `make deploy` builds and pushes it anyway — this is for looking at it first.
+detector-image: ## Build the detector image locally (no push, no Azure) — smoke-test it before deploying
+	./scripts/build-detector-image.sh --local-only
 
 detector-start: ## Turn the Azure detector ON (scales the container to 1 replica — bills per hour)
 	./scripts/deploy-azure.sh start

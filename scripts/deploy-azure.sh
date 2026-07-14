@@ -13,12 +13,19 @@
 # apply, y un provider no puede configurarse con algo que todavía no existe. Sin
 # Databricks ese motivo desapareció.
 #
-# La imagen del detector se construye con `az acr build` — es decir, DENTRO de Azure.
-# No es una preferencia: en esta caja no hay Docker ni Podman, y el proyecto ya descartó
-# Docker-dentro-de-distrobox por frágil. El único motor de build que tenemos es el de la
-# nube. La construcción la dispara el propio `terraform apply` (infra/detector.tf), para
-# que el orden registro -> imagen -> Container App sea una dependencia real y no una
-# secuencia que este script tenga que acertar de memoria.
+# La imagen del detector se construye ACÁ, con el podman del HOST (se lo alcanza con
+# distrobox-host-exec), y se empuja al registro: scripts/build-detector-image.sh.
+#
+# Antes se construía con `az acr build`, o sea DENTRO de Azure, y el motivo declarado era
+# "en esta caja no hay Docker ni Podman". Era falso: esta distrobox la corre el podman del
+# host. El motor siempre estuvo ahí, a un salto — la caja no lo veía.
+#
+# Lo que construir local nos da: la imagen se puede CORRER y probar antes de que toque
+# Azure (`make detector-image`). Lo que cuesta: el primer push manda ~450 MB desde acá.
+#
+# La construcción la dispara el propio `terraform apply` (infra/detector.tf), para que el
+# orden registro -> imagen -> Container App sea una dependencia real y no una secuencia
+# que este script tenga que acertar de memoria.
 #
 # Este script NO reemplaza a Terraform: lo orquesta. Todo lo que crea es
 # declarativo y `down` lo borra entero.
@@ -67,12 +74,50 @@ preflight() {
   ARM_SUBSCRIPTION_ID="$(az account show --query id -o tsv)"
   export ARM_SUBSCRIPTION_ID
   ok "Suscripción $(az account show --query name -o tsv)"
-  # `terraform apply` va a llamar a `az acr build`: sin sesión activa, el apply moriría
-  # a mitad de camino en vez de acá.
-  ok "az listo para construir la imagen del detector en ACR"
+  # El push del detector se autentica con un token ARM de vida corta (el registro no
+  # tiene admin user): sin sesión activa, el apply moriría a mitad de camino.
 
+  check_build_engine
   check_repo_reachable
   ok "Preflight OK"
+}
+
+# El `terraform apply` construye la imagen del detector con podman (o docker). Si no hay
+# motor, el apply se caería DESPUÉS de haber creado media infraestructura — con el
+# registro y la red ya cobrando. Se verifica antes de gastar un centavo.
+#
+# Se llama desde tf_apply(), que es el EMBUDO por donde pasan todos los apply (up, start,
+# stop). Ponerlo ahí y no en cada comando no es elegancia: `detector-start` y
+# `detector-stop` escriben `detector_running` en el tfvars y RECIÉN DESPUÉS aplican, así
+# que un apply que muere por falta de motor deja el estado deseado ya mutado. El próximo
+# deploy leería `detector_running = true` contra 0 réplicas reales en Azure y
+# killswitch_guard abortaría anunciando "EL KILL-SWITCH DISPARÓ" — mandándote a auditar la
+# factura cuando lo único que faltaba era un binario. Una alarma de costos que miente
+# sobre su propia causa es peor que no tener alarma.
+#
+# Memoizado: preflight() y el caso `guard` también lo llaman, y no hace falta anunciarlo
+# dos veces en el mismo comando.
+BUILD_ENGINE_CHECKED=0
+check_build_engine() {
+  [ "$BUILD_ENGINE_CHECKED" -eq 1 ] && return 0
+
+  local engine=""
+
+  if command -v podman >/dev/null 2>&1 || command -v docker >/dev/null 2>&1; then
+    engine="en esta caja"
+  elif command -v distrobox-host-exec >/dev/null 2>&1 \
+    && { distrobox-host-exec podman --version >/dev/null 2>&1 \
+      || distrobox-host-exec docker --version >/dev/null 2>&1; }; then
+    engine="en el host (vía distrobox-host-exec)"
+  fi
+
+  [ -n "$engine" ] || die "No hay podman ni docker para construir la imagen del detector.
+     Se busca primero en esta caja y después en el HOST (distrobox-host-exec).
+     En el host (Fedora): sudo dnf install podman
+     Es el mismo motor que ya corre esta distrobox — normalmente ya está."
+
+  BUILD_ENGINE_CHECKED=1
+  ok "Motor de build del detector: encontrado ${engine}"
 }
 
 # cloud-init clona el repo por HTTPS SIN credenciales para desplegar la app en la
@@ -331,7 +376,11 @@ apply_args() {
   fi
 }
 
+# El embudo de TODOS los apply (up, start, stop). El chequeo del motor de build va acá,
+# y no en cada comando, para que ningún camino futuro pueda olvidarse de él: si un apply
+# puede construir la imagen, tiene que poder verificar primero que hay con qué.
 tf_apply() {
+  check_build_engine
   terraform -chdir="$INFRA" init -input=false >/dev/null
   # shellcheck disable=SC2046
   terraform -chdir="$INFRA" apply $(apply_args)
@@ -365,7 +414,7 @@ cmd_up() {
   killswitch_guard          # ANTES de aplicar: un apply podría revertir el corte de gasto
   write_calibration_tfvars
 
-  say "Desplegando (el apply construye la imagen del detector con az acr build: ~4 min la primera vez)"
+  say "Desplegando (el apply construye la imagen del detector acá y la empuja: ~4 min de build + ~450 MB de push la primera vez)"
   tf_apply
 
   write_env_azure
@@ -414,6 +463,10 @@ write_env_azure() {
 # disparó, este comando es justamente la decisión informada de revertirlo.
 cmd_start() {
   [ -f "$TFVARS" ] || die "No hay despliegue. Corré primero: make deploy"
+  # ANTES de tocar el tfvars, no después: set_detector_running escribe el estado deseado
+  # en disco, así que un apply que muere más adelante lo deja mutado y el próximo deploy
+  # lo confunde con un kill-switch disparado. El chequeo tiene que abortar antes de eso.
+  check_build_engine
   say "Encendiendo el detector (1 réplica)"
   set_detector_running true
   AUTO=1 tf_apply
@@ -423,6 +476,8 @@ cmd_start() {
 
 cmd_stop() {
   [ -f "$TFVARS" ] || die "No hay despliegue."
+  # Igual que en cmd_start: el chequeo va antes de mutar el tfvars (ver check_build_engine).
+  check_build_engine
   say "Apagando el detector (0 réplicas)"
   set_detector_running false
   AUTO=1 tf_apply
@@ -570,7 +625,15 @@ case "$cmd" in
   start)     cmd_start ;;
   stop)      cmd_stop ;;
   status)    cmd_status ;;
-  guard)     killswitch_guard; ok "El apply no revierte ningún corte de gasto" ;;
+  # `make infra-apply` (el escape hatch para manejar Terraform a mano) llama SOLO a esto
+  # antes de su `terraform apply`. Así que todo guard que deba proteger un apply tiene que
+  # estar acá, no solo dentro de preflight() — que solo corre en `up`.
+  #
+  # Van los dos: el del kill-switch (un apply revertiría un corte de gasto) y el del motor
+  # de build (sin podman, el apply crea el registro y Log Analytics —ya cobrando— y recién
+  # entonces se muere al construir la imagen). El comentario del propio target lo dice: el
+  # escape hatch no puede ser la forma de saltear la red de seguridad.
+  guard)     killswitch_guard; check_build_engine; ok "El apply no revierte ningún corte de gasto y puede construir la imagen" ;;
   vm-stop)   cmd_vm_stop ;;
   vm-start)  cmd_vm_start ;;
   down)      cmd_down ;;

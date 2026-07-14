@@ -1,8 +1,12 @@
-# `az acr build` uploads this whole directory to Azure as the build context, so what
-# is excluded here is a security control, not a size optimisation. This repo has a
-# habit of dropping .env files around (see .gitignore), and one of them landing in an
-# image layer would ship the Event Hubs key to the registry — where it would sit,
-# readable, in every pull.
+# This whole directory is the build context, so what is excluded here is a security
+# control, not a size optimisation. This repo has a habit of dropping .env files around
+# (see .gitignore), and one of them landing in an image layer would ship the Event Hubs
+# key to the registry — where it would sit, readable, in every pull.
+#
+# That is true no matter WHERE the build runs. It used to run inside Azure (`az acr
+# build` uploaded this directory); it now runs locally with podman and only the image is
+# pushed. The exclusions matter exactly as much either way: the layer is what leaks, not
+# the upload.
 #
 # The image needs exactly two files from this directory: red_point_detector.py and
 # entrypoint.sh. Everything else is noise at best.

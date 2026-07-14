@@ -54,7 +54,12 @@ La v1 queda preservada en la rama `v1-databricks`.
 
 Todo corre dentro del **distrobox `seminario`** para no ensuciar el host. El
 manifiesto `distrobox.ini` lo recrea con Java 17, Python, bun (no se instala
-node: el servidor Node corre con bun) y el Azure CLI que necesita el despliegue.
+node: el servidor Node corre con bun), Terraform y el Azure CLI que necesita el despliegue.
+
+**La única cosa que se necesita EN EL HOST es podman** — y ya está ahí, porque es el motor que
+corre esta distrobox. El despliegue lo usa para construir la imagen del detector y lo alcanza
+con `distrobox-host-exec`. No se instala podman *dentro* de la caja: podman-dentro-de-podman
+cae al driver `vfs` y copia el filesystem entero por capa.
 
 ## Puesta en marcha (entorno de desarrollo)
 
@@ -146,7 +151,7 @@ Un solo comando hace todo lo que antes era una checklist manual:
 | Guard del kill-switch | Aborta si el kill-switch del presupuesto disparó (un apply lo revertiría) |
 | `infra/terraform.tfvars` | Lo genera (email del presupuesto + llave SSH — la crea si no existe) |
 | `infra/detector.auto.tfvars` | Calibración del detector, leída de `env/env.prod.example` |
-| `terraform apply` | Red, VM, Event Hubs, ADLS, registro + **imagen del detector** (`az acr build`, dentro de Azure) + Container App **apagada**, presupuesto y kill-switch |
+| `terraform apply` | Red, VM, Event Hubs, ADLS, registro + **imagen del detector** (build local con podman → push al registro) + Container App **apagada**, presupuesto y kill-switch |
 | `.env.azure` | Perfil listo para correr el detector/metaverso local contra Azure |
 | Espera | Hasta que cloud-init termine y la web responda (~5 min) |
 
@@ -186,10 +191,13 @@ del contenedor traen el banner de arranque.
 make deploy-down
 ```
 
-Detalle de recursos, costos por recurso e internals (por qué la imagen se
-construye con `az acr build`, dónde vive el checkpoint de Spark, los límites de
-Azure for Students, el kill-switch del presupuesto):
+Detalle de recursos, costos por recurso e internals (por qué la imagen se construye
+**localmente con el podman del host** y no dentro de Azure, dónde vive el checkpoint de
+Spark, los límites de Azure for Students, el kill-switch del presupuesto):
 [`infra/README.md`](infra/README.md).
+
+> `make detector-image` construye la imagen del detector **sin tocar Azure** (sin push, sin
+> sesión, sin registro). Sirve para probarla antes de desplegar.
 
 ## Documentación
 
