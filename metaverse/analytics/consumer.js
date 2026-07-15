@@ -1,9 +1,10 @@
 // ════════════════════════════════════════════════════════════════
 //  CONSUMIDOR ANALÍTICO (M5) — lee los topics de Kafka y agrega por
 //  VENTANAS de ~1s, separado por sala. Expone las métricas que el
-//  servidor manda a cada cliente según su rol:
-//   · metricsForUser(room, slot)  → your_analytics (nivel USUARIO)
-//   · metricsForAdmin(room)       → admin_analytics (nivel ADMIN)
+//  servidor manda al tablero del admin:
+//   · metricsForAdmin(room)       → admin_analytics (lo único que sale al cliente)
+//   · metricsForUser(room, slot)  → auxiliar interno: arma el desglose por
+//     usuario que metricsForAdmin mete en perUser. No se emite por sí solo.
 //  Si el broker no está disponible, se suscribe al bus en-proceso del
 //  KafkaBridge (mismos eventos, misma agregación — cero cambios aquí).
 // ════════════════════════════════════════════════════════════════
@@ -230,7 +231,7 @@ export class AnalyticsConsumer {
     if (st) st.global.redZones = count
   }
 
-  // ── Nivel USUARIO: your_analytics ──
+  // ── Nivel USUARIO: insumo de perUser en metricsForAdmin (no se emite solo) ──
   metricsForUser(room, slot) {
     const st = this.rooms.get(room)
     const u = st?.users.get(slot)

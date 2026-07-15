@@ -7,6 +7,11 @@ dist/
 # Presentation and reference material — internal, never published to the remote
 *.pdf
 *.pptx
+# Working notes: jury feedback and the project's tracking sheet. Insumo del equipo,
+# no documentacion del sistema. Deliberadamente NO se ignora *.csv: los resultados
+# de la medicion H1 se exportan en ese formato y si deben versionarse.
+ajustes.txt
+DATOS DEL PROYECTO*.csv
 
 # Local dev logs (make dev)
 logs/

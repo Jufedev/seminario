@@ -6,10 +6,12 @@
 //    (admin sin code → crea sala nueva; con code → se une a esa)
 //  Protocolo saliente:  room_joined | room_state | join_error
 //                       + sim_info | world_snapshot (por sala)
+//                       + chat_message (efímero, sin Kafka: ver chat.js)
 //  Arrancar con: make metaverse-server
 // ════════════════════════════════════════════════════════════════
 import { WebSocketServer } from 'ws'
 import { RoomManager } from './rooms.js'
+import { buildChatMessage, ChatRateLimiter } from './chat.js'
 import { KafkaBridge } from './kafkaProducer.js'
 import { AnalyticsConsumer } from '../analytics/consumer.js'
 import { RedPointStore } from '../analytics/redPoints.js'
@@ -20,7 +22,7 @@ console.debug = () => {}
 
 const PORT = 8080
 const TICK_HZ = 20
-const ANALYTICS_EMIT_MS = 1000   // cadencia de your_analytics / admin_analytics
+const ANALYTICS_EMIT_MS = 1000   // cadencia de admin_analytics
 
 // ── M5: productor Kafka (o bus local si no hay broker) + consumidor analítico ──
 const bridge = new KafkaBridge()
@@ -40,6 +42,7 @@ function send(ws, obj) { if (ws.readyState === 1) ws.send(JSON.stringify(obj)) }
 
 wss.on('connection', (ws, req) => {
   ws._room = null   // sala a la que pertenece este socket (null hasta join_room)
+  ws._chatRate = new ChatRateLimiter()   // higiene de inundación del chat, por socket
   console.log(`[ws] conexión (${req.socket.remoteAddress}) · sockets: ${wss.clients.size}`)
 
   ws.on('message', data => {
@@ -50,6 +53,13 @@ wss.on('connection', (ws, req) => {
     // slot/rol del socket (autoritativo), nunca el userId que diga el cliente.
     const room = ws._room
     if (!room) return
+    // Chat de sala: lo mandan usuarios y admin, así que se resuelve ANTES de
+    // ramificar por rol. Se queda en la capa WebSocket: ni Kafka ni detector.
+    if (msg.type === 'chat_send') {
+      const chat = buildChatMessage(room, { role: ws._role, slot: ws._slot }, msg.text)
+      if (chat && ws._chatRate.allow()) room.broadcast(chat)
+      return
+    }
     const sim = room.sim
     bridge.setContext(room.code)   // eventos emitidos por este mensaje → topic con SU sala
     if (ws._role === 'user') {
@@ -156,22 +166,21 @@ setInterval(() => {
   rooms.sweep()
 }, 1000 / TICK_HZ)
 
-// ── Emisión de analítica por rol (cada ~1s): el consumidor agrega, el server reparte ──
+// ── Emisión de analítica (cada ~1s): el consumidor agrega, el server la manda al
+//    admin. La analítica de la sala vive SOLO en el tablero del admin; el desglose
+//    por usuario viaja dentro de admin_analytics (metricsForAdmin arma perUser con
+//    metricsForUser), así que no hay emisión por socket de usuario.
 setInterval(() => {
   for (const room of rooms.all()) {
     // Zonas rojas del detector Spark (fuente de verdad): alimentan el KPI y la
     // serie roja del consumidor ANTES de armar las métricas, y el heatmap del admin.
+    // Se anotan aunque el admin esté desconectado: la serie de la sala no puede
+    // quedar con huecos por quién esté mirando.
     const sparkRedZones = redStore.activeZonesFor(room.code)
     analytics.noteSparkRedZones(room.code, sparkRedZones.length)
     if (room.admin) {
       const metrics = analytics.metricsForAdmin(room.code)
       if (metrics) send(room.admin, { type: 'admin_analytics', ...metrics, sparkRedZones })
-    }
-    for (let slot = 1; slot <= 3; slot++) {
-      const u = room.users[slot - 1]
-      if (!u) continue
-      const metrics = analytics.metricsForUser(room.code, slot)
-      if (metrics) send(u.ws, { type: 'your_analytics', userId: slot, metrics })
     }
   }
 }, ANALYTICS_EMIT_MS)

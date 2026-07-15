@@ -12,6 +12,10 @@
   --green: #34d399;
   --amber: #fbbf24;
   --red: #f87171;
+  /* Ancho de la columna izquierda —en las DOS vistas—: el panel de arriba y el
+     chat de abajo lo comparten, así se leen como una sola columna. También es la
+     medida con la que el anuncio del admin calcula su hueco libre. */
+  --side-panel-w: 300px;
   font-family: 'Segoe UI', system-ui, sans-serif;
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -47,8 +51,13 @@ input[type="range"] {
   min-height: 100vh; display: flex; flex-direction: column; align-items: center;
   justify-content: center; text-align: center; padding: 40px 24px; gap: 14px;
 }
-.view-portada h1 { font-size: 40px; font-weight: 800; }
-.view-portada .subtitle { color: var(--text-dim); max-width: 640px; line-height: 1.6; font-size: 15px; }
+/* El título es el de la tesis, largo y a varias líneas: se le pone tope de ancho
+   (a 40px y sin tope ocuparía todo el monitor y se leería como un renglón) y el
+   tamaño cede con la ventana. El interlineado baja porque son varias líneas. */
+.view-portada h1 {
+  font-size: clamp(22px, 3.2vw, 34px); font-weight: 800;
+  max-width: 900px; line-height: 1.3; text-wrap: balance;
+}
 .view-portada .pregunta {
   margin: 10px 0; padding: 16px 24px; border-left: 3px solid var(--accent);
   background: rgba(59,130,246,0.08); border-radius: 8px; max-width: 640px; text-align: left;
@@ -107,27 +116,37 @@ input[type="range"] {
 .lobby-msg.error { color: var(--red); font-weight: 700; }
 @media (max-width: 700px) { .lobby-grid { grid-template-columns: 1fr; } }
 
-/* ── Banner de sala + rol (vistas admin/usuario) ── */
-.room-code-banner {
-  position: absolute; top: 14px; left: 50%; transform: translateX(-50%);
-  z-index: 11; display: flex; align-items: center; gap: 12px;
-  padding: 8px 18px; font-size: 13px; pointer-events: none; white-space: nowrap;
-}
+/* ── Código de sala ──
+      Ninguna de las dos vistas lleva ya chip en el centro del borde superior: el
+      código vive dentro del panel de la izquierda, y la identidad de quien mira,
+      en la lista "En la sala". Con el centro del borde libre, el anuncio del
+      admin no le disputa el sitio a nada y nada se mueve cuando él habla. */
 .room-code { font-size: 17px; letter-spacing: 2px; color: var(--accent); }
 .btn-copy-code {
-  pointer-events: auto;   /* el banner tiene pointer-events:none; el boton debe recibir el click */
   background: none; color: inherit;
   border: 1px solid rgba(148,163,184,0.4); border-radius: 6px;
   padding: 2px 7px; font-size: 13px; line-height: 1.4; cursor: pointer;
 }
 .btn-copy-code:hover { border-color: var(--accent); }
 .btn-copy-code.copied { border-color: #4ade80; color: #4ade80; }
-.role-badge { padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 800; letter-spacing: .6px; }
-.role-badge.admin { background: rgba(251,191,36,0.18); color: var(--amber); border: 1px solid var(--amber); }
-.role-badge.user { background: rgba(59,130,246,0.18); color: var(--accent); border: 1px solid var(--accent); }
 .hud-members { font-size: 12px; line-height: 1.7; }
-.admin-controls { display: flex; gap: 6px; margin-top: 10px; }
-.admin-controls .btn { padding: 8px 10px; font-size: 12px; flex: 1; }
+/* Una fila por miembro. La de quien mira va resaltada: sin chip de rol en el
+   borde superior, esta fila es la que dice "cuál soy yo". La etiqueta "tú" toma
+   su color de la fila (la flota del usuario; el oro del admin), no uno nuevo. */
+.hud-member { display: flex; align-items: center; gap: 6px; }
+.hud-member.is-me { font-weight: 700; }
+.hud-me {
+  font-size: 9px; font-weight: 800; letter-spacing: .6px; text-transform: uppercase;
+  border: 1px solid currentColor; border-radius: 20px; padding: 0 6px; line-height: 1.5;
+}
+/* Código de sala dentro del panel: el código y el botón de copiar, nada más.
+   Las dos vistas lo llevan; en la del admin es además su tarea principal,
+   porque es quien reparte el código. */
+.room-code-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.admin-controls { display: flex; gap: 4px; margin-top: 10px; }
+/* Los tres botones reparten el ancho del panel: sin nowrap y con este relleno,
+   "Reiniciar" se parte en dos líneas y estira la fila entera. */
+.admin-controls .btn { padding: 8px 4px; font-size: 12px; flex: 1; white-space: nowrap; }
 .admin-alerts { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
 .admin-alert {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
@@ -135,6 +154,35 @@ input[type="range"] {
   background: rgba(251,191,36,0.12); border: 1px solid var(--amber); color: var(--amber);
 }
 .admin-alert .btn { padding: 6px 10px; font-size: 11px; }
+
+/* ── Anuncio del admin: su mensaje de chat, colgado del borde superior ──
+      El admin no tiene avatar, así que su voz no sale de un cuerpo (burbuja 3D)
+      sino del marco de la ventana, como una megafonía. Va a ras del borde y sin
+      borde propio arriba ni esquinas redondeadas arriba: el borde de la ventana
+      ES el borde del anuncio, y la línea que lo remata deja ver de dónde cuelga.
+      Oro del admin, el mismo del chip 👑 ADMIN (--amber). */
+.chat-announce {
+  position: absolute; top: 0; left: 50%; transform: translateX(-50%); z-index: 13;
+  pointer-events: none;
+  /* El anuncio va centrado y la barra superior deja su centro vacío, así que en
+     pantallas anchas nunca se tocan. Al angostarse la ventana el anuncio sí
+     alcanzaría el panel de la izquierda: entonces se estrecha él (y crece de
+     alto envolviendo el texto) en vez de empujar el panel, porque lo que no
+     puede taparse son las zonas rojas del detector. El tope mide el hueco libre
+     entre los dos costados de la barra: margen (14px) + panel + aire (8px). */
+  max-width: max(240px, min(560px, calc(100vw - 2 * (14px + var(--side-panel-w) + 8px))));
+  display: flex; align-items: baseline; gap: 9px;
+  padding: 9px 20px 11px; font-size: 13px; line-height: 1.5; word-break: break-word;
+  color: var(--amber); background: rgba(251,191,36,0.13); backdrop-filter: blur(12px);
+  border: 1px solid var(--amber); border-top: none; border-radius: 0 0 14px 14px;
+  box-shadow: 0 6px 24px rgba(251,191,36,0.22);
+}
+/* El remate contra el borde: una línea de oro pegada al canto de la ventana. */
+.chat-announce::before {
+  content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+  background: var(--amber); border-radius: 0 0 2px 2px;
+}
+.chat-announce b { white-space: nowrap; letter-spacing: .4px; }
 
 /* ── Tarjeta de decisión de 5s (M4) ── */
 .decision-card {
@@ -156,13 +204,17 @@ input[type="range"] {
   background: var(--panel-bg); border: 1px solid var(--panel-border);
 }
 .dc-note.hidden { display: none; }
-.user-controls { min-width: 270px; max-width: 300px; }
+/* El ancho lo fija .sim-metrics, que este panel también lleva (ver más abajo). */
 .user-controls .od-selects { margin-top: 0; }
 .user-controls .btn { width: 100%; }
 
 /* ── Vista Simulación ── */
 .view-sim { position: relative; width: 100vw; height: 100vh; overflow: hidden; }
 #sim-canvas { display: block; width: 100%; height: 100%; }
+/* La barra se queda quieta —en las DOS vistas—: reparte su contenido a los
+   costados (space-between) y deja el centro libre, que es justo por donde baja
+   el anuncio del admin. Nada cede el sitio, así que cuando el admin habla NADA
+   se mueve en pantalla. */
 .sim-topbar {
   position: absolute; top: 14px; left: 14px; right: 14px; display: flex;
   justify-content: space-between; align-items: flex-start; gap: 12px; pointer-events: none;
@@ -175,7 +227,11 @@ input[type="range"] {
   padding: 8px 16px; font-size: 13px; font-weight: 700; border-radius: 8px;
 }
 .cam-toggle button.active { background: var(--accent-strong); color: #fff; border-color: var(--accent-strong); }
-.sim-metrics { display: flex; flex-direction: column; gap: 4px; min-width: 220px; }
+/* Ancho fijo, igual que .user-controls: el chat de abajo copia esta medida y los
+   dos tienen que coincidir al pixel. Además es el hueco que el anuncio del admin
+   da por supuesto: sin un ancho fijo, las líneas largas de "Flotas de la sala"
+   estirarían el panel y en una ventana angosta el anuncio acabaría tapándolo. */
+.sim-metrics { display: flex; flex-direction: column; gap: 4px; width: var(--side-panel-w); }
 .sim-metrics .row { display: flex; justify-content: space-between; font-size: 12px; }
 .sim-metrics .row .k { color: var(--text-dim); }
 .sim-metrics .row .v { font-weight: 700; }
@@ -189,6 +245,32 @@ input[type="range"] {
 /* Colapsado: solo queda la barra del título; el cuerpo se oculta para despejar el mapa. */
 .sim-metrics.collapsed { min-width: 0; }
 .sim-metrics.collapsed .sim-metrics-body { display: none; }
+
+/* ── Chat de sala: historial reciente. Lo que importa (la burbuja sobre el
+      avatar) se dibuja en el mundo 3D, no aquí. Colapsable, como el panel de
+      métricas: abajo-izquierda también hay mapa que mirar. ── */
+.chat-panel {
+  position: absolute; bottom: 16px; left: 14px; z-index: 12; pointer-events: auto;
+  width: var(--side-panel-w); padding: 10px 12px; display: flex; flex-direction: column; gap: 6px;
+}
+.chat-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.chat-head h3 { margin-bottom: 0; }
+.chat-body { display: flex; flex-direction: column; gap: 6px; }
+.chat-panel.collapsed .chat-body { display: none; }
+.chat-log {
+  height: 128px; overflow-y: auto; font-size: 12px; line-height: 1.6;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.chat-line { word-break: break-word; }
+.chat-form { display: flex; gap: 6px; }
+.chat-form input {
+  flex: 1; min-width: 0; padding: 7px 9px; border-radius: 8px;
+  font-family: inherit; font-size: 12px; color: var(--text);
+  background: rgba(255,255,255,0.06); border: 1px solid var(--panel-border);
+}
+.chat-form input::placeholder { color: var(--text-dim); }
+.chat-form input:focus { outline: none; border-color: var(--accent); }
+.chat-form .btn { padding: 7px 12px; font-size: 12px; }
 
 /* ── Dashboard de analítica (Vista 3) ── */
 .dash-fab {

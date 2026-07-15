@@ -7,6 +7,7 @@ import { SIM_CONFIG } from '../sim/config.js'
 import { INCIDENT_TYPES, createIncidentMarker } from '../sim/incidents.js'
 import { ANALYTICS_CONFIG } from '../analytics/config.js'
 import { buildRoads, buildStreetLabels, buildOriginDestMarkers, buildRoute } from './worldBuilders.js'
+import { createChatBubbles } from './chatBubbles.js'
 import { SnapshotInterpolator } from '../net/interpolation.js'
 
 // ════════════════════════════════════════════════════════════════
@@ -138,6 +139,10 @@ export function createOnlineWorld(canvas, { initialMode = '2d', onHud = null, hi
     }
   }
 
+  // ── Burbujas de chat: una por slot, ancladas al avatar que lo representa ──
+  const bubbles = createChatBubbles(scene)
+  const chatAnchors = new Map()   // slot → avatar interpolado (se rehace cada frame)
+
   const interp = new SnapshotInterpolator(120)
   let lastSnap = null
   let snapCount = 0
@@ -165,10 +170,16 @@ export function createOnlineWorld(canvas, { initialMode = '2d', onHud = null, hi
 
     const agents = interp.sample()
     if (agents) {
+      chatAnchors.clear()
       let n = 0
       for (const ag of agents) {
         const isPersonal = ag.o >= PERSONAL_OFFSET
         const slot = isPersonal ? ag.o - PERSONAL_OFFSET : ag.o
+        // Ancla de la burbuja: SOLO el vehículo personal. La flota son vehículos
+        // simulados, no el avatar de nadie: si hablaran ellos, el mensaje saldría
+        // de un carro cualquiera de la oleada. Sin vehículo personal invocado el
+        // mensaje vive únicamente en el panel de chat.
+        if (isPersonal) chatAnchors.set(slot, ag)
         const own = highlightOwner != null && slot === highlightOwner
         _e.set(0, ag.h, 0); _q.setFromEuler(_e)
         _m4.compose(_pos.set(ag.x, 0.55, ag.z), _q, isPersonal ? _pers : own ? _big : _one)
@@ -190,6 +201,7 @@ export function createOnlineWorld(canvas, { initialMode = '2d', onHud = null, hi
       agentMesh.instanceMatrix.needsUpdate = true
       if (agentMesh.instanceColor) agentMesh.instanceColor.needsUpdate = true
     }
+    bubbles.update(now, chatAnchors, mode === '2d')
 
     hudTimer += dt
     if (hudTimer >= 0.5 && onHud) {
@@ -224,6 +236,15 @@ export function createOnlineWorld(canvas, { initialMode = '2d', onHud = null, hi
       scene.add(runGroup)
     },
 
+    // chat_message → burbuja sobre el avatar del emisor. Solo los usuarios
+    // (slot 1..3) tienen avatar; el admin no habla por aquí, su mensaje lo
+    // anuncia el borde de la ventana (chatBanner.js).
+    sayChat(slot, text) {
+      const color = OWNER_COLORS[slot]
+      if (!color) return
+      bubbles.say(slot, text, color)
+    },
+
     // world_snapshot del servidor: buffer + semáforos + incidentes
     pushSnapshot(msg) {
       interp.push(msg)
@@ -239,6 +260,7 @@ export function createOnlineWorld(canvas, { initialMode = '2d', onHud = null, hi
       window.removeEventListener('resize', resize)
       controls.dispose()
       traffic.dispose()
+      bubbles.dispose()
       syncIncidents([])   // limpia todos los marcadores de incidente
       zonePlanes.forEach(p => { p.geometry.dispose(); p.material.dispose(); p.removeFromParent() })
       agentMesh.geometry.dispose(); agentMesh.material.dispose(); agentMesh.removeFromParent()

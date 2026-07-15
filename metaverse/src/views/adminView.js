@@ -1,7 +1,10 @@
 import { navigate } from '../router.js'
 import { session } from '../net/session.js'
 import { createOnlineWorld, OWNER_COLORS } from './onlineWorld.js'
+import { CHAT_PANEL_HTML, wireChatPanel } from './chatPanel.js'
 import { wireCopyButton } from '../ui/clipboard.js'
+import { wireCollapseToggle } from '../ui/collapse.js'
+import { memberRow } from '../ui/memberRow.js'
 
 // ════════════════════════════════════════════════════════════════
 //  VISTA ADMIN (M3) — mundo completo en 3D (con toggle a 2D).
@@ -11,28 +14,26 @@ import { wireCopyButton } from '../ui/clipboard.js'
 // ════════════════════════════════════════════════════════════════
 export function renderAdminView(app) {
   // Sin sala activa (URL directa o sesión caída) → al lobby
-  if (session.role !== 'admin' || !session.code) { navigate('#/lobby'); return }
+  if (session.role !== 'admin' || !session.code) { navigate('/lobby'); return }
 
   const view = document.createElement('div')
   view.className = 'view-sim'
   view.innerHTML = `
     <canvas id="sim-canvas"></canvas>
-    <div class="room-code-banner panel">
-      <span class="role-badge admin">👑 ADMIN</span>
-      <span>Sala <b class="room-code">${session.code}</b> — comparte este código</span>
-      <button id="btn-copy-code" class="btn-copy-code" title="Copiar código de sala">📋</button>
-      <span id="r-status">🟡</span>
-    </div>
     <div class="sim-topbar">
       <div class="panel sim-metrics">
         <div class="sim-metrics-head">
-          <h3>👑 Admin · ${session.name}</h3>
+          <h3>Panel de control</h3>
           <button id="metrics-toggle" class="metrics-toggle" title="Colapsar / expandir el panel (despeja el mapa)">▾</button>
         </div>
         <div class="sim-metrics-body">
-          <div class="row"><span class="k">Tick servidor</span><span class="v" id="r-tick">—</span></div>
-          <div class="row"><span class="k">Mundo (salieron / llegaron)</span><span class="v" id="r-counts">0 / 0</span></div>
-          <div class="row"><span class="k">Estado</span><span class="v" id="r-running">—</span></div>
+          <h3>En la sala</h3>
+          <div id="r-members" class="hud-members">—</div>
+          <div class="room-code-row">
+            <b class="room-code">${session.code}</b>
+            <button id="btn-copy-code" class="btn-copy-code" title="Copiar código de sala">📋</button>
+          </div>
+          <div class="row" style="margin-top:10px"><span class="k">Estado</span><span class="v" id="r-running">—</span></div>
           <div class="slider-row" style="margin-top:10px">
             <div class="head"><span>Frecuencia de incidentes</span><b id="lbl-freq">cada ~10s</b></div>
             <input type="range" id="sl-freq" min="3" max="60" value="10" />
@@ -45,8 +46,6 @@ export function renderAdminView(app) {
           <h3 style="margin-top:10px">Flotas de la sala</h3>
           <div id="r-fleets" class="hud-members">— sin flotas configuradas —</div>
           <div id="r-alerts" class="admin-alerts"></div>
-          <h3 style="margin-top:10px">En la sala</h3>
-          <div id="r-members" class="hud-members">—</div>
         </div>
       </div>
       <div style="display:flex;flex-direction:column;gap:8px;align-items:flex-end">
@@ -57,6 +56,7 @@ export function renderAdminView(app) {
         </div>
       </div>
     </div>
+    ${CHAT_PANEL_HTML}
     <button id="dash-toggle" class="btn secondary dash-fab">📊 Analítica global</button>
     <div id="dash-panel" class="panel dash-panel hidden">
       <div class="dash-head">
@@ -93,8 +93,6 @@ export function renderAdminView(app) {
   const world = createOnlineWorld(view.querySelector('#sim-canvas'), {
     initialMode: '3d',
     onHud: h => {
-      view.querySelector('#r-tick').textContent = h.tick ?? '—'
-      view.querySelector('#r-counts').textContent = `${h.spawned} / ${h.arrived}`
       view.querySelector('#r-running').textContent = h.running ? '▶️ corriendo' : '⏸️ pausada'
     },
   })
@@ -109,7 +107,7 @@ export function renderAdminView(app) {
   btn2d.addEventListener('click', () => setMode('2d'))
   btn3d.addEventListener('click', () => setMode('3d'))
   wireCopyButton(view.querySelector('#btn-copy-code'), () => session.code)
-  view.querySelector('#btn-leave').addEventListener('click', () => { session.leave(); navigate('#/lobby') })
+  view.querySelector('#btn-leave').addEventListener('click', () => { session.leave(); navigate('/lobby') })
 
   // ── Controles del admin → mensajes al servidor ──
   const slFreq = view.querySelector('#sl-freq')
@@ -122,12 +120,7 @@ export function renderAdminView(app) {
   // Colapsar el panel de métricas: se ubica arriba-IZQUIERDA, justo donde se
   // arman las colas (cerca de los spawns), así que tapa las zonas rojas que el
   // admin está mostrando. Colapsado deja solo la barra del título → mapa libre.
-  const simMetrics = view.querySelector('.sim-metrics')
-  const metricsToggle = view.querySelector('#metrics-toggle')
-  metricsToggle.addEventListener('click', () => {
-    const collapsed = simMetrics.classList.toggle('collapsed')
-    metricsToggle.textContent = collapsed ? '▸' : '▾'
-  })
+  wireCollapseToggle(view.querySelector('.sim-metrics'), view.querySelector('#metrics-toggle'))
 
   // ── Estado que llega del servidor ──
   function showSimInfo(m) {
@@ -166,13 +159,17 @@ export function renderAdminView(app) {
     })
     alerts.appendChild(div)
   }
+  // ── En la sala ──
+  // Misma lista que en la vista del usuario y con el mismo constructor: el punto
+  // de color ya dice qué slot es cada quien, así que la fila lleva el nombre.
+  // Aquí el espectador es el admin, y su fila (punto y etiqueta "tú") va en oro
+  // —el mismo --amber del anuncio y del antiguo chip 👑 ADMIN—, no en un color
+  // de flota: el admin no tiene flota.
   function showMembers(rs) {
-    const lines = [`👑 ${rs.admin ?? '(sin admin)'}`]
-    for (const u of rs.users) {
-      const color = OWNER_COLORS[u.slot] ?? '#94a3b8'
-      lines.push(`<span style="color:${color}">■</span> Usuario ${u.slot} · ${u.name}`)
-    }
-    view.querySelector('#r-members').innerHTML = lines.join('<br>')
+    view.querySelector('#r-members').replaceChildren(
+      memberRow('👑', 'var(--amber)', rs.admin ?? session.name, true),
+      ...rs.users.map(u => memberRow('■', OWNER_COLORS[u.slot] ?? '#94a3b8', u.name, false)),
+    )
   }
 
   // ── Dashboard global (M5): admin_analytics llega cada ~1s del consumidor Kafka ──
@@ -270,11 +267,8 @@ export function renderAdminView(app) {
     session.on('room_state', showMembers),
     session.on('alert_admin', showAlert),
     session.on('admin_analytics', showAnalytics),
-    session.on('status', st => {
-      view.querySelector('#r-status').textContent = st === 'open' ? '🟢' : st === 'connecting' ? '🟡' : '🔴'
-    }),
+    wireChatPanel(view, world),
   ]
-  view.querySelector('#r-status').textContent = session.status === 'open' ? '🟢' : '🟡'
 
   window.__teardownView = () => {
     subs.forEach(off => off())

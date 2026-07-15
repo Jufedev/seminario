@@ -5,15 +5,14 @@ import { session } from '../net/session.js'
 //  LOBBY (M2) — puerta de entrada al modo multi-usuario:
 //  · ADMIN: crea la sala → el servidor genera el código ECCI-XXXX.
 //  · USUARIO: se une con el código que le compartió el admin.
-//  Según el rol confirmado (room_joined), navega a #/admin o #/user.
+//  Según el rol confirmado (room_joined), navega a /admin o /user.
 // ════════════════════════════════════════════════════════════════
 export function renderLobby(app) {
   const view = document.createElement('div')
   view.className = 'view-lobby'
   view.innerHTML = `
     <h1>🌐 Modo multi-usuario</h1>
-    <p class="subtitle">1 administrador + hasta 3 usuarios comparten el mismo mundo en tiempo real.<br>
-    El servidor debe estar corriendo: <code>make metaverse-server</code></p>
+    <p class="subtitle">1 administrador + hasta 3 usuarios comparten el mismo mundo en tiempo real.</p>
     <div class="lobby-grid">
       <div class="panel lobby-card">
         <h3>👑 Crear sala (Admin)</h3>
@@ -38,7 +37,7 @@ export function renderLobby(app) {
   const btnCreate = view.querySelector('#btn-create')
   const btnJoin = view.querySelector('#btn-join')
 
-  view.querySelector('#btn-back').addEventListener('click', () => { session.leave(); navigate('#/') })
+  view.querySelector('#btn-back').addEventListener('click', () => { session.leave(); navigate('/') })
 
   function setBusy(b, text = '') {
     btnCreate.disabled = b
@@ -63,7 +62,7 @@ export function renderLobby(app) {
 
   // room_joined confirma rol y sala → ir a la vista correspondiente
   const offJoined = session.on('room_joined', m => {
-    navigate(m.role === 'admin' ? '#/admin' : '#/user')
+    navigate(m.role === 'admin' ? '/admin' : '/user')
   })
   const offError = session.on('join_error', m => {
     setBusy(false)

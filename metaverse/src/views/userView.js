@@ -2,7 +2,11 @@ import { navigate } from '../router.js'
 import { session } from '../net/session.js'
 import { createOnlineWorld, OWNER_COLORS } from './onlineWorld.js'
 import { buildOptions } from './config.js'
+import { CHAT_PANEL_HTML, wireChatPanel } from './chatPanel.js'
 import { wireCopyButton } from '../ui/clipboard.js'
+import { wireCollapseToggle } from '../ui/collapse.js'
+import { memberRow } from '../ui/memberRow.js'
+import { fleetButtonDisabled } from './fleetButton.js'
 
 // ════════════════════════════════════════════════════════════════
 //  VISTA USUARIO (M3) — SOLO 2D cenital. El usuario controla SU flota:
@@ -12,52 +16,44 @@ import { wireCopyButton } from '../ui/clipboard.js'
 // ════════════════════════════════════════════════════════════════
 export function renderUserView(app) {
   // Sin sala activa (URL directa o sesión caída) → al lobby
-  if (session.role !== 'user' || !session.code) { navigate('#/lobby'); return }
+  if (session.role !== 'user' || !session.code) { navigate('/lobby'); return }
 
-  const myColor = OWNER_COLORS[session.slot] ?? '#94a3b8'
   const view = document.createElement('div')
-  view.className = 'view-sim'
+  view.className = 'view-sim view-sim-user'
   view.innerHTML = `
     <canvas id="sim-canvas"></canvas>
-    <div class="room-code-banner panel">
-      <span class="role-badge user" style="border-color:${myColor};color:${myColor}">🚗 USUARIO ${session.slot}</span>
-      <span>Sala <b class="room-code">${session.code}</b></span>
-      <button id="btn-copy-code" class="btn-copy-code" title="Copiar código de sala">📋</button>
-      <span id="r-status">🟡</span>
-    </div>
     <div class="sim-topbar">
       <div class="panel sim-metrics user-controls">
-        <h3>🚗 Mi flota · ${session.name}</h3>
-        <div class="od-selects" style="margin-top:6px">
-          <label>Origen<select id="sel-origin">${buildOptions(null)}</select></label>
-          <label>Destino<select id="sel-dest">${buildOptions(null)}</select></label>
+        <div class="sim-metrics-head">
+          <h3>Panel de control</h3>
+          <button id="metrics-toggle" class="metrics-toggle" title="Colapsar / expandir el panel (despeja el mapa)">▾</button>
         </div>
-        <div class="slider-row" style="margin-top:10px">
-          <div class="head"><span>Vehículos</span><b id="lbl-count">20</b></div>
-          <input type="range" id="sl-count" min="1" max="150" value="20" />
-        </div>
-        <div class="slider-row" style="margin-top:8px">
-          <div class="head"><span>Salida</span><b id="lbl-spawn">5 cada 2s</b></div>
-          <div class="spawn-pair">
-            <div><div class="mini-lbl">Por oleada</div><input type="range" id="sl-batch" min="1" max="20" value="5" /></div>
-            <div><div class="mini-lbl">Segundos</div><input type="range" id="sl-every" min="0.5" max="10" step="0.5" value="2" /></div>
+        <div class="sim-metrics-body">
+          <h3>En la sala</h3>
+          <div id="r-members" class="hud-members">—</div>
+          <div class="room-code-row">
+            <b class="room-code">${session.code}</b>
+            <button id="btn-copy-code" class="btn-copy-code" title="Copiar código de sala">📋</button>
           </div>
+          <div class="row" style="margin-top:10px"><span class="k">Estado</span><span class="v" id="r-running">—</span></div>
+          <div class="od-selects" style="margin-top:10px">
+            <label>Origen<select id="sel-origin">${buildOptions(null)}</select></label>
+            <label>Destino<select id="sel-dest">${buildOptions(null)}</select></label>
+          </div>
+          <div class="slider-row" style="margin-top:10px">
+            <div class="head"><span>Vehículos</span><b id="lbl-count">20</b></div>
+            <input type="range" id="sl-count" min="1" max="150" value="20" />
+          </div>
+          <div class="slider-row" style="margin-top:8px">
+            <div class="head"><span>Salida</span><b id="lbl-spawn">5 cada 2s</b></div>
+            <div class="spawn-pair">
+              <div><div class="mini-lbl">Por oleada</div><input type="range" id="sl-batch" min="1" max="20" value="5" /></div>
+              <div><div class="mini-lbl">Segundos</div><input type="range" id="sl-every" min="0.5" max="10" step="0.5" value="2" /></div>
+            </div>
+          </div>
+          <button class="btn" id="btn-personal" disabled style="margin-top:12px">🚗 Invocar MI vehículo</button>
+          <button class="btn secondary" id="btn-fleet" disabled style="margin-top:6px">🚚 Invocar flota</button>
         </div>
-        <button class="btn" id="btn-personal" disabled style="margin-top:12px">🚗 Invocar MI vehículo</button>
-        <button class="btn secondary" id="btn-fleet" disabled style="margin-top:6px">🚚 Invocar flota</button>
-        <div class="row" style="margin-top:10px"><span class="k">Mi vehículo</span><span class="v" id="r-personal">— sin invocar —</span></div>
-        <div class="row"><span class="k">Mi flota (salieron / llegaron)</span><span class="v" id="r-mine" style="color:${myColor}">0 / 0</span></div>
-        <div class="row"><span class="k">Mundo (todos)</span><span class="v" id="r-counts">0 / 0</span></div>
-        <div class="row"><span class="k">Estado</span><span class="v" id="r-running">—</span></div>
-        <h3 style="margin-top:10px">📊 Mi analítica (BigData)</h3>
-        <div class="row"><span class="k">Tiempo prom. de mi flota</span><span class="v" id="a-avg">—</span></div>
-        <div class="row"><span class="k">Mi vehículo (viajes · t̄)</span><span class="v" id="a-pers">—</span></div>
-        <div class="row"><span class="k">Decisiones (seguir/alterna/⏱)</span><span class="v" id="a-dec">0 / 0 / 0</span></div>
-        <div class="row"><span class="k">Ahorro por alternativas</span><span class="v" id="a-save">0s</span></div>
-        <div class="row"><span class="k">Score de eficiencia E</span><span class="v" id="a-eff">—</span></div>
-        <div class="row"><span class="k">Recálculos sufridos</span><span class="v" id="a-rer">0</span></div>
-        <h3 style="margin-top:10px">En la sala</h3>
-        <div id="r-members" class="hud-members">—</div>
       </div>
       <button class="btn secondary" id="btn-leave">← Salir de la sala</button>
     </div>
@@ -70,6 +66,7 @@ export function renderUserView(app) {
       </div>
     </div>
     <div id="dc-note" class="dc-note hidden"></div>
+    ${CHAT_PANEL_HTML}
   `
   app.appendChild(view)
 
@@ -78,13 +75,15 @@ export function renderUserView(app) {
     initialMode: '2d',
     highlightOwner: session.slot,
     onHud: h => {
-      view.querySelector('#r-counts').textContent = `${h.spawned} / ${h.arrived}`
       view.querySelector('#r-running').textContent = h.running ? '▶️ corriendo' : '⏸️ pausada por el admin'
     },
   })
 
-  view.querySelector('#btn-leave').addEventListener('click', () => { session.leave(); navigate('#/lobby') })
+  view.querySelector('#btn-leave').addEventListener('click', () => { session.leave(); navigate('/lobby') })
   wireCopyButton(view.querySelector('#btn-copy-code'), () => session.code)
+  // Mismo plegado que el panel del admin: el panel se para sobre el carril de
+  // la izquierda, donde el detector marca las zonas rojas.
+  wireCollapseToggle(view.querySelector('.sim-metrics'), view.querySelector('#metrics-toggle'))
 
   // ── Controles de flota → mensajes al servidor ──
   const selOrigin = view.querySelector('#sel-origin')
@@ -118,9 +117,12 @@ export function renderUserView(app) {
 
   // invoke_vehicle = MI vehículo personal (el de la decisión de 5s); invoke_fleet = la flota
   btnPersonal.addEventListener('click', () => session.socket.send({ type: 'invoke_vehicle', userId: session.slot }))
+  // La flota se invoca una sola vez por corrida: se bloquea de inmediato para no
+  // encolar otra tanda con doble clic, y el sim_info de vuelta confirma el bloqueo
+  // (o lo levanta, si el admin reinició la sala).
   btnFleet.addEventListener('click', () => {
     session.socket.send({ type: 'invoke_fleet', userId: session.slot })
-    btnFleet.textContent = '🚚 Invocar más flota'
+    btnFleet.disabled = true
   })
 
   // ── Tarjeta de decisión (route_offer → 5 segundos → route_decision) ──
@@ -174,63 +176,41 @@ export function renderUserView(app) {
     world.applySimInfo(m)
     const mine = m.fleets.find(f => f.slot === session.slot)
     if (mine) {
-      view.querySelector('#r-mine').textContent = `${mine.spawned} / ${mine.arrived}`
+      // El estado del vehículo personal lo carga el propio botón: sin fila que
+      // lo repita, el rótulo es el que dice si va en camino.
       const p = mine.personal
-      view.querySelector('#r-personal').textContent =
-        p.active ? '🚗 en camino' : p.arrived > 0 ? `✅ llegó (${p.arrived} viajes)` : '— sin invocar —'
       btnPersonal.disabled = !(mine.origin && mine.dest) || p.active
       btnPersonal.textContent = p.active ? '🚗 Mi vehículo va en camino' : '🚗 Invocar MI vehículo'
       // sincronizar controles si el server ya tenía config (reconexión / otra pestaña)
       if (mine.origin && !selOrigin.value) selOrigin.value = mine.origin
       if (mine.dest && !selDest.value) selDest.value = mine.dest
     }
-    btnFleet.disabled = !(mine && mine.origin && mine.dest)
+    // Bloqueo de la flota: lo decide el servidor (fleets[].invoked), que el reset
+    // del admin vuelve a false. Ver fleetButton.js.
+    btnFleet.disabled = fleetButtonDisabled(mine)
   }
-  // Conteo en vivo de MI flota a partir del snapshot (stride 6: owner en la posición 5)
-  function countMine(m) {
-    let spawned = 0, arrived = 0
-    for (let k = 0; k < m.a.length; k += 6) {
-      if (m.a[k + 5] !== session.slot) continue
-      spawned++
-      if (m.a[k + 4] === 3 /* ARRIVED */) arrived++
-    }
-    view.querySelector('#r-mine').textContent = `${spawned} / ${arrived}`
-  }
+  // ── En la sala ──
+  // El punto de color ya dice qué slot es cada quien: la fila lleva el nombre,
+  // no el rótulo del slot (ver memberRow).
   function showMembers(rs) {
-    const lines = [rs.adminReady ? `👑 ${rs.admin}` : '👑 (admin desconectado)']
-    for (const u of rs.users) {
-      const color = OWNER_COLORS[u.slot] ?? '#94a3b8'
-      const me = u.slot === session.slot ? ' ← tú' : ''
-      lines.push(`<span style="color:${color}">■</span> Usuario ${u.slot} · ${u.name}${me}`)
-    }
-    view.querySelector('#r-members').innerHTML = lines.join('<br>')
-  }
-
-  // Analítica personal (M5): la agrega el consumidor Kafka y llega cada ~1s
-  function showMyAnalytics({ metrics: a }) {
-    view.querySelector('#a-avg').textContent = a.fleet.avgTravel_s != null ? `${a.fleet.avgTravel_s}s` : '—'
-    view.querySelector('#a-pers').textContent = a.personal.trips
-      ? `${a.personal.trips} · ${a.personal.avgTravel_s}s` : '—'
-    view.querySelector('#a-dec').textContent = `${a.decisions.keep} / ${a.decisions.alternative} / ${a.decisions.timeout}`
-    view.querySelector('#a-save').textContent = `${a.savings_s}s`
-    view.querySelector('#a-eff').textContent = a.efficiency != null ? a.efficiency.toFixed(2) : '—'
-    view.querySelector('#a-rer').textContent = a.reroutes
+    view.querySelector('#r-members').replaceChildren(
+      memberRow('👑', 'var(--amber)', rs.adminReady ? rs.admin : '(admin desconectado)', false),
+      ...rs.users.map(u => memberRow(
+        '■', OWNER_COLORS[u.slot] ?? '#94a3b8', u.name, u.slot === session.slot,
+      )),
+    )
   }
 
   if (session.simInfo) showSimInfo(session.simInfo)
   if (session.roomState) showMembers(session.roomState)
 
   const subs = [
-    session.on('world_snapshot', m => { world.pushSnapshot(m); countMine(m) }),
+    session.on('world_snapshot', m => world.pushSnapshot(m)),
     session.on('sim_info', showSimInfo),
     session.on('room_state', showMembers),
     session.on('route_offer', showOffer),
-    session.on('your_analytics', showMyAnalytics),
-    session.on('status', st => {
-      view.querySelector('#r-status').textContent = st === 'open' ? '🟢' : st === 'connecting' ? '🟡' : '🔴'
-    }),
+    wireChatPanel(view, world),
   ]
-  view.querySelector('#r-status').textContent = session.status === 'open' ? '🟢' : '🟡'
 
   window.__teardownView = () => {
     subs.forEach(off => off())
