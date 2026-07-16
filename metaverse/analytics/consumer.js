@@ -265,8 +265,11 @@ export class AnalyticsConsumer {
     // Rankings del desglose: mejor decisor, flota más rápida, quién sufre más congestión
     const withArrivals = perUser.filter(p => p.fleet.arrived > 0)
     const bestDecider = perUser.reduce((b, p) => (p.savings_s > (b?.savings_s ?? 0) ? p : b), null)
+    // Más rápida y más lenta, las dos por tiempo medio de viaje, solo entre las que
+    // llegaron (sin llegada no hay tiempo que comparar). Par simétrico: el jurado
+    // lee "esta fue la mejor, esta la peor" de un vistazo.
     const fastestFleet = withArrivals.reduce((b, p) => (!b || p.fleet.avgTravel_s < b.fleet.avgTravel_s ? p : b), null)
-    const mostCongested = perUser.reduce((b, p) => (p.reroutes > (b?.reroutes ?? -1) ? p : b), null)
+    const slowestFleet = withArrivals.reduce((b, p) => (!b || p.fleet.avgTravel_s > b.fleet.avgTravel_s ? p : b), null)
 
     // Zona más crítica de la sesión (C̄ acumulado) → cruce aproximado por nombres reales
     let critical = null
@@ -292,7 +295,10 @@ export class AnalyticsConsumer {
       rankings: {
         bestDecider: bestDecider && bestDecider.savings_s > 0 ? bestDecider.slot : null,
         fastestFleet: fastestFleet?.slot ?? null,
-        mostCongested: mostCongested && mostCongested.reroutes > 0 ? mostCongested.slot : null,
+        // Solo si es OTRA flota que la más rápida: con una sola flota llegada, la
+        // misma sería la más rápida Y la más lenta, y mostrar los dos trofeos juntos
+        // no dice nada.
+        slowestFleet: (slowestFleet && slowestFleet.slot !== fastestFleet?.slot) ? slowestFleet.slot : null,
       },
       zones: { C: st.zonesC, red: st.zonesRed, cols: CFG.GRID_COLS, rows: CFG.GRID_ROWS },
       critical,

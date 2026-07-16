@@ -242,7 +242,7 @@ export function renderAdminView(app) {
       const tr = document.createElement('tr')
       const trophies = [
         m.rankings.fastestFleet === p.slot ? '🥇' : '',
-        m.rankings.mostCongested === p.slot ? '🐌' : '',
+        m.rankings.slowestFleet === p.slot ? '🐢' : '',
       ].join('')
       tr.innerHTML = `
         <td style="color:${OWNER_COLORS[p.slot] ?? '#94a3b8'}">■ U${p.slot} ${trophies}</td>
@@ -253,7 +253,7 @@ export function renderAdminView(app) {
       table.appendChild(tr)
     }
     view.querySelector('#d-rank').textContent =
-      'Viaje medio: tiempo puerta a puerta · Eficiencia = óptima ÷ recorrida (1.00 = ruta ideal) · 🥇 más rápida · 🐌 más rerutas'
+      'Viaje medio: tiempo puerta a puerta · Eficiencia = óptima ÷ recorrida (1.00 = ruta ideal) · 🥇 más rápida · 🐢 más lenta'
     view.querySelector('#d-critical').textContent = m.critical
       ? `foco: ${m.critical.label}` : 'foco: —'
     // Bordes rojos del heatmap desde las zonas rojas de Spark (no las del ZoneSystem).
