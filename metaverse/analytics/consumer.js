@@ -11,7 +11,7 @@
 import { Kafka, logLevel } from 'kafkajs'
 import { SIM_EVENTS_TOPIC } from '../server/kafkaProducer.js'
 import { kafkaConfig, kafkaBrokers } from '../server/kafkaConfig.js'
-import { CALLES, CARRERAS, MAP_BOUNDS } from '../src/graph/mapData.js'
+import { CALLES, CARRERAS } from '../src/graph/mapData.js'
 import { ANALYTICS_CONFIG as CFG } from '../src/analytics/config.js'
 
 const PERSONAL_OFFSET = 100
