@@ -1,4 +1,8 @@
 checkpoints/
+# Corrida archivada del detector (Parquet, megabytes): es el LAGO DE DATOS local,
+# insumo de la medición de H1. Se regenera corriendo el stack con ARCHIVE_PATH; lo
+# que se versiona es el RESULTADO (h1_latency_clean.csv), no los datos crudos.
+archive/
 __pycache__/
 .venv/
 .env
