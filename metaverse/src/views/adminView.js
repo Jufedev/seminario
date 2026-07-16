@@ -75,7 +75,13 @@ export function renderAdminView(app) {
         <div class="dash-card">
           <h4>Desglose por usuario</h4>
           <table class="dash-table" id="d-users">
-            <tr><th>U</th><th>Llegados</th><th>t̄ (s)</th><th>Efic.</th><th>Rerutas</th></tr>
+            <tr>
+              <th>U</th>
+              <th>Llegados</th>
+              <th title="Tiempo medio de viaje de la flota que llegó, en segundos">Viaje medio (s)</th>
+              <th title="Eficiencia de ruta = distancia óptima ÷ distancia realmente recorrida. 1.00 = viajó por la ruta ideal; menos = dio vueltas por atascos o reruteos">Eficiencia</th>
+              <th title="Veces que la flota fue reruteada para esquivar una zona roja de Spark">Rerutas</th>
+            </tr>
           </table>
           <div id="d-rank" style="font-size:11px;color:var(--text-dim);margin-top:6px">—</div>
         </div>
@@ -247,7 +253,7 @@ export function renderAdminView(app) {
       table.appendChild(tr)
     }
     view.querySelector('#d-rank').textContent =
-      '🥇 flota más rápida · 🐌 más congestión sufrida'
+      'Viaje medio: tiempo puerta a puerta · Eficiencia = óptima ÷ recorrida (1.00 = ruta ideal) · 🥇 más rápida · 🐌 más rerutas'
     view.querySelector('#d-critical').textContent = m.critical
       ? `foco: ${m.critical.label}` : 'foco: —'
     // Bordes rojos del heatmap desde las zonas rojas de Spark (no las del ZoneSystem).
