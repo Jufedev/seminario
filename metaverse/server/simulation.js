@@ -1,20 +1,26 @@
 // ════════════════════════════════════════════════════════════════
 //  SIMULACIÓN AUTORITATIVA (M4) — además de las flotas (M3), cada
-//  usuario tiene UN VEHÍCULO PERSONAL (owner = slot + 100):
-//  · Cuando un atasco/bloqueo aparece en SU ruta, el vehículo se PAUSA
-//    (solo él: el resto del mundo sigue) y el servidor ofrece la
-//    decisión de 5s: seguir (keep) o tomar la alternativa.
-//  · Sin respuesta al vencer el deadline → 'keep'.
+//  usuario tiene UN VEHÍCULO PERSONAL (owner = slot + 100) que CONDUCE
+//  EL USUARIO (freeDrive):
+//  · No AVANZA solo: va mientras su dueño mantenga el acelerador
+//    (drive_throttle). Sin acelerador se comporta como si tuviera el
+//    semáforo en rojo, así que la fila y el car-following lo tratan
+//    igual que a cualquier auto detenido.
+//  · No se rerutea solo: ante un atasco o un bloqueo se queda donde
+//    está y espera la decisión de su dueño (ver onRerouteIntercept).
+//    Las flotas de M3 conservan intacto su reruteo automático.
+//  · El usuario elige la salida del cruce con drive_intent y recibe
+//    drive_state por el outbox; sin pedir nada, el vehículo sigue
+//    recto.
 //  · Si el usuario no invoca su vehículo a tiempo → alerta al admin,
 //    que puede invocarlo por él.
-//  Las flotas conservan el auto-reroute automático de M3.
 // ════════════════════════════════════════════════════════════════
 import {
-  POINTS, NODES, pointNode, allEdges, createEdgeState, resetGraph,
-  dijkstra, isEdgeBlocked, pathLengthUnits, UNIT_TO_METERS, setEdgePenalty, edgePenalty,
+  POINTS, pointNode, allEdges, createEdgeState, resetGraph,
+  dijkstra, pathLengthUnits, UNIT_TO_METERS, setEdgePenalty, isEdgeBlocked,
 } from './graph.js'
 import { TrafficSystem } from '../src/sim/traffic.js'
-import { AgentSystem } from '../src/sim/agents.js'
+import { AgentSystem, AGENT_STATE } from '../src/sim/agents.js'
 import { IncidentManager } from '../src/sim/incidents.js'
 import { ZoneSystem } from '../src/analytics/zones.js'
 import { SIM_CONFIG } from '../src/sim/config.js'
@@ -32,11 +38,21 @@ const LIMITS = {
   spawnEvery: [0.5, 10],
   incidentFreq: [3, 60],
 }
-const OFFER_MS = 5000          // ventana de decisión del usuario
-const OFFER_COOLDOWN_MS = 15000 // tras decidir, no re-ofertar al mismo vehículo por un rato
 const ALERT_AFTER_MS = 15000   // ruta configurada sin invocar el personal → alerta al admin
 
+const DRIVE_DIRS = ['left', 'straight', 'right']   // las ÚNICAS intenciones que acepta el servidor
+
 const POS_SAMPLE_S = 1         // cadencia del feed por-avatar hacia Spark (avatar-positions): ~1 Hz, NO 20 Hz
+
+// Cada cuánto se recalcula la ruta sugerida del vehículo personal (la línea
+// punteada). Se recalcula POR RELOJ y no con un contador de versión del grafo, que
+// sería más preciso pero habría que acordarse de tocarlo en cada lugar que muta una
+// arista —zonas rojas, incidente que empieza, incidente que expira, reset—: olvidar
+// uno solo deja la línea punteada vieja SIN ningún error, y una recomendación que
+// miente en silencio es peor que no tenerla. Por reloj no puede quedar rancia.
+// El costo es despreciable: ~2.5 Dijkstra/s por vehículo sobre 208 nodos, y hay 3
+// vehículos como mucho.
+const SUGGEST_EVERY_S = 0.4
 // Penalización a Dijkstra por arista de una zona roja de Spark. El peso de una
 // arista es su distancia euclídea (~30 por cuadra): con 40 cruzar la zona
 // costaba apenas ~1 cuadra extra y Dijkstra seguía atravesándola. Con 500
@@ -48,7 +64,6 @@ const clamp = (v, [lo, hi], fallback) => {
   return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : fallback
 }
 const r2 = v => Math.round(v * 100) / 100
-const r1 = v => Math.round(v * 10) / 10
 
 export class Simulation {
   constructor(label = '', epoch = '') {
@@ -78,13 +93,10 @@ export class Simulation {
       headless: true, metricsOnly: true, graphState: this.graphState,
     })
     this.routesByUser = new Map()   // slot → {origin, dest, optimal_m} (para sim_info y eficiencia)
+    this._installDriveIntercept()
 
-    // ── Estado M4: ofertas, decisiones y alertas ──
-    this.pendingOffers = new Map()      // slot → {slot, vehicleId, currentEta, altEta, deadline}
-    this.offerCooldownUntil = new Map() // vehicleId → ms de pared (no re-ofertar enseguida)
-    this.decisions = []                  // registro de decisiones (listo para Kafka en M5)
+    // ── Estado M4: mensajes dirigidos y alertas de invocación ──
     this.outbox = []                     // mensajes dirigidos: {to: slot|'admin', msg}
-    this.infoDirty = false               // sim_info cambió por un evento interno (timeout de oferta)
     this.routeSetAt = new Map()          // slot → ms en que configuró su ruta (para la alerta)
     this.alertSent = new Set()           // slots ya alertados
     this.personalInvoked = new Set()     // slots que ya invocaron su vehículo alguna vez
@@ -106,16 +118,32 @@ export class Simulation {
     this._sparkRedZones = new Set()
     this._sparkRedNodeIds = new Set()
 
-    // Los vehículos PERSONALES no auto-rerutean: se pausan y su dueño decide.
-    this.agents.onRerouteIntercept = (i, motivo, a, b) => {
-      const owner = this.agents.owner[i]
-      if (owner < PERSONAL_OFFSET) return false   // flotas: comportamiento automático de M3
-      this._tryCreateOffer(owner - PERSONAL_OFFSET, i, a, b)
-      return true
-    }
+    // ── drive_state: último estado ENVIADO por avatar (agent index → clave) ──
+    // Existe para emitir solo ante un cambio real: sin esto habría un mensaje por
+    // tick (20 Hz) por vehículo, que es justo lo que world_snapshot ya hace bien.
+    this._driveStateSent = new Map()
+
+    // ── Ruta sugerida (línea punteada): agent index → { at, route } ──
+    // Cachea el Dijkstra penalizado para no correrlo a 20 Hz (ver SUGGEST_EVERY_S).
+    this._suggestCache = new Map()
 
     // La caché de rutas evita las zonas rojas de SPARK: la detección vive en el Big Data.
     this._installSparkRedChecker()
+  }
+
+  // ── El vehículo personal NO se rerutea solo: lo conduce su dueño ──
+  // Devolver true = "yo me hago cargo, no rerutees". _triggerReroute pisa pathNodes
+  // con un Dijkstra nuevo: sobre una conducción libre eso borraría el volante del
+  // usuario EN SILENCIO — sin error, sin choque, con el carro en otra calle. Por eso
+  // el gancho intercepta los tres motivos ('atascado', 'zona_roja', 'incidente') y
+  // deja al vehículo quieto donde está, esperando el giro que decida su dueño.
+  //
+  // Para TODO avatar de flota devuelve false, que es exactamente lo que veía el motor
+  // con el gancho en null: el reruteo automático de M3 queda intacto.
+  //
+  // Se instala una sola vez: _reset() recrea el ZoneSystem, pero NO el AgentSystem.
+  _installDriveIntercept() {
+    this.agents.onRerouteIntercept = i => this.agents.freeDrive[i] === 1
   }
 
   // El checker de la caché usa el conjunto de node ids rojos de Spark. Se
@@ -165,6 +193,9 @@ export class Simulation {
   }
 
   // Invoca el VEHÍCULO PERSONAL del usuario (uno activo a la vez).
+  // Nace en conducción libre y QUIETO: espera a que su dueño ponga el acelerador
+  // (ver setDriveThrottle). Ya andando, sin intención sigue recto, obedece
+  // semáforos y hace fila detrás de la flota, pero no se rerutea solo.
   // source: 'usuario' | 'admin' (el admin puede invocarlo tras la alerta)
   invokePersonal(slot, source = 'usuario') {
     const route = this.routesByUser.get(slot)
@@ -172,7 +203,7 @@ export class Simulation {
     const owner = slot + PERSONAL_OFFSET
     const oNode = pointNode(route.origin), dNode = pointNode(route.dest)
     let fleet = this.agents.fleets.get(owner)
-    if (!fleet) fleet = this.agents.addFleet(owner, { originId: oNode, destId: dNode, count: 1, spawnBatch: 1, spawnIntervalMs: 500, priority: true })
+    if (!fleet) fleet = this.agents.addFleet(owner, { originId: oNode, destId: dNode, count: 1, spawnBatch: 1, spawnIntervalMs: 500, priority: true, freeDrive: true })
     else this.agents.setFleetRoute(owner, oNode, dNode)
     const enCamino = fleet.remaining + fleet.pending > 0 || fleet.spawned > fleet.arrived
     if (enCamino) return false             // ya hay un personal en la vía
@@ -184,95 +215,120 @@ export class Simulation {
     return true
   }
 
+  // ── Volante del vehículo personal (M4) ──
+  // `dir` viene del cliente: se valida contra las tres literales, y el nodo que
+  // resulta lo valida _applyIntent contra la adyacencia del GRAPH (un giro que la
+  // malla no tiene se descarta y el lookahead actual se conserva). El cliente no
+  // nombra ni el vehículo ni el nodo: el slot lo pone el socket y el resto sale del
+  // estado autoritativo, así que no hay movimiento ilegal que expresar.
+  // Devuelve true solo si la intención quedó aplicada.
+  setDriveIntent(slot, dir) {
+    if (!DRIVE_DIRS.includes(dir)) return false
+    const i = this._personalAgent(slot)
+    return i < 0 ? false : this.agents._applyIntent(i, dir)
+  }
+
+  // Acelerador del vehículo personal: `on` es SOSTENIDO (vale hasta que el dueño
+  // suelte la tecla), a diferencia de la intención de giro, que es un evento de un
+  // solo uso. Son dos mensajes por pisada, no un canal de 20 Hz.
+  // El vehículo no acelera solo: sin esto en 1, _stepAgent lo trata como si tuviera
+  // el semáforo en rojo. Y no hay reversa que expresar — `on` es un booleano.
+  setDriveThrottle(slot, on) {
+    const i = this._personalAgent(slot)
+    if (i < 0) return false
+    this.agents.throttle[i] = on ? 1 : 0
+    return true
+  }
+
+  // Índice del vehículo personal VIVO del usuario, o -1. Los índices no se reciclan
+  // dentro de una corrida: los personales ya llegados siguen ahí con el mismo owner,
+  // y por eso se descartan por estado y no por dueño.
+  _personalAgent(slot) {
+    const as = this.agents
+    const owner = slot + PERSONAL_OFFSET
+    for (let i = 0; i < as.agentCount; i++) {
+      if (as.owner[i] !== owner || !as.freeDrive[i]) continue
+      if (!as.active[i] || as.state[i] === AGENT_STATE.ARRIVED) continue
+      return i
+    }
+    return -1
+  }
+
+  // Estado del volante que ve el dueño: el cruce que viene, qué giros existen ahí y
+  // si el tramo de más allá está bloqueado por un incidente. blockedAhead se LEE del
+  // grafo (no se acumula desde el gancho 'bloqueado' de _stepAgent): así se apaga
+  // solo cuando el incidente expira, sin estado que mantener sincronizado.
+  // Por la invariante de ≥2 tramos por delante, path[k+1] y path[k+2] siempre existen
+  // mientras el avatar no haya llegado.
+  _driveStateFor(i) {
+    const as = this.agents
+    const path = as.pathNodes[i]
+    const k = as.segIndex[i]
+    const from = path[k], next = path[k + 1]
+    const options = {}
+    for (const d of DRIVE_DIRS) options[d] = as._neighborInDirection(from, next, d) !== null
+    return {
+      type: 'drive_state',
+      vehicleId: i,
+      nextNode: next,
+      pending: as.intent[i] ?? null,
+      options,
+      blockedAhead: isEdgeBlocked(next, path[k + 2], this.graphState),
+      route: this._suggestedRoute(i),
+    }
+  }
+
+  // Ruta más rápida DESDE el cruce que viene HASTA el destino, sobre el grafo de
+  // ESTA sala: las zonas rojas de Spark (penalización) y los tramos bloqueados por
+  // incidentes ya están adentro. Es la línea PUNTEADA del cliente.
+  //
+  // Su contraparte es la línea sólida, que el cliente calcula con el mismo Dijkstra
+  // pero sobre el grafo LIMPIO (`dijkstra(a, b)` sin state → la ruta ideal, como si
+  // no hubiera pasado nada). Que las dos se separen es la congestión hecha visible:
+  // la sólida es el plan, la punteada es lo que conviene AHORA.
+  //
+  // Arranca en `path[k+1]` —el cruce que viene— y no en la posición del auto: entre
+  // dos cruces ya no se puede elegir, así que sugerir desde el nodo de atrás daría
+  // una ruta que pide un giro imposible.
+  _suggestedRoute(i) {
+    const c = this._suggestCache.get(i)
+    if (c && this.time - c.at < SUGGEST_EVERY_S) return c.route
+    const as = this.agents
+    const from = as.pathNodes[i][as.segIndex[i] + 1]   // la invariante de ≥2 tramos lo garantiza
+    const route = dijkstra(from, as.destNode[i], this.graphState) ?? []
+    this._suggestCache.set(i, { at: this.time, route })
+    return route
+  }
+
+  // Encola drive_state al dueño SOLO cuando cambió algo. En la práctica eso es un
+  // mensaje por cruce (~8 s) más uno por intención aceptada: no es un canal de 20 Hz
+  // y por eso no viaja en world_snapshot (broadcast a todos) ni en sim_info.
+  _pumpDriveState() {
+    const as = this.agents
+    for (let i = 0; i < as.agentCount; i++) {
+      if (!as.freeDrive[i]) continue
+      // Llegó (o lo borró un reset): que la próxima invocación vuelva a emitir de cero
+      if (!as.active[i] || as.state[i] === AGENT_STATE.ARRIVED) {
+        this._driveStateSent.delete(i)
+        this._suggestCache.delete(i)   // su ruta sugerida murió con él
+        continue
+      }
+      const msg = this._driveStateFor(i)
+      // La ruta entra en la clave: es lo que cambia cuando Spark pinta una zona roja
+      // sin que el vehículo se haya movido, y es justo el momento que hay que mostrar.
+      const key = `${msg.nextNode}|${msg.pending}|${msg.options.left}${msg.options.straight}${msg.options.right}|${msg.blockedAhead}|${msg.route.join('>')}`
+      if (this._driveStateSent.get(i) === key) continue
+      this._driveStateSent.set(i, key)
+      this.outbox.push({ to: as.owner[i] - PERSONAL_OFFSET, msg })
+    }
+  }
+
   _fleetDefaults() {
     return {
       count: FLEET_DEFAULTS.count,
       spawnBatch: FLEET_DEFAULTS.spawnBatch,
       spawnIntervalMs: FLEET_DEFAULTS.spawnEvery * 1000,
     }
-  }
-
-  // ── Decisión de los 5 segundos ──
-  // Crea la oferta para el vehículo personal `i` del usuario `slot` (si procede).
-  _tryCreateOffer(slot, i, blockA, blockB) {
-    if (this.pendingOffers.has(slot)) return                              // ya está decidiendo
-    if ((this.offerCooldownUntil.get(i) ?? 0) > Date.now()) return        // decidió hace poco: sigue esperando
-    const as = this.agents
-    const path = as.pathNodes[i]
-    if (!path) return
-    const destNode = path[path.length - 1]
-    const fromNode = path[as.segIndex[i] + 1] ?? path[as.segIndex[i]]
-    const altTail = dijkstra(fromNode, destNode, this.graphState)
-    if (!altTail || altTail.length < 2) return                            // sin alternativa: nada que decidir
-
-    const speed = SIM_CONFIG.AGENT_SPEED * as.speedFactor[i]
-    // ETA actual = terminar la ruta de siempre + costo del bloqueo/zona roja en la vía
-    const currentEta = as.remainingDistanceUnits(i) / speed + this._blockRemaining(i, speed, blockA, blockB)
-    // ETA alternativa = llegar al nodo de adelante + recorrer la ruta nueva
-    const a0 = NODES[path[as.segIndex[i]]], b0 = NODES[fromNode]
-    const toNode = Math.max(0, Math.hypot(a0.x - b0.x, a0.z - b0.z) - as.segDist[i])
-    const altEta = (toNode + pathLengthUnits(altTail)) / speed
-
-    const deadline = Date.now() + OFFER_MS
-    this.pendingOffers.set(slot, { slot, vehicleId: i, currentEta, altEta, deadline })
-    as.setPaused(i, true)   // SOLO este avatar se pausa; el resto del mundo sigue
-    this.outbox.push({
-      to: slot,
-      msg: { type: 'route_offer', userId: slot, vehicleId: i, currentEta: r1(currentEta), altEta: r1(altEta), deadline },
-    })
-    console.log(`[sim${this.label}] oferta al Usuario ${slot} (veh ${i}): seguir ~${currentEta.toFixed(0)}s vs alterna ~${altEta.toFixed(0)}s`)
-  }
-
-  // Costo (segundos) que el bloqueo/zona roja en la ruta del vehículo `i` añade a
-  // su ETA "seguir". `speed` (unidades/s) convierte la penalización de zona roja a
-  // segundos de demora, ya que una zona roja de Spark no bloquea: penaliza la vía.
-  _blockRemaining(i, speed, blockA, blockB) {
-    let edge = blockA && blockB ? { a: blockA, b: blockB } : null
-    if (!edge) {
-      // Detecta el primer tramo problemático de la ruta restante: bloqueado por un
-      // incidente O penalizado por una zona roja de Spark (Map de penalización).
-      const as = this.agents, path = as.pathNodes[i]
-      for (let k = as.segIndex[i]; k < path.length - 1; k++) {
-        if (isEdgeBlocked(path[k], path[k + 1], this.graphState) ||
-            edgePenalty(path[k], path[k + 1], this.graphState) > 0) {
-          edge = { a: path[k], b: path[k + 1] }; break
-        }
-      }
-    }
-    if (edge) {
-      // Incidente real → esperar a que se libere (tiempo restante del bloqueo).
-      const inc = this.incidents.active.find(x =>
-        (x.edge.a === edge.a && x.edge.b === edge.b) || (x.edge.a === edge.b && x.edge.b === edge.a))
-      if (inc) return Math.max(0, inc.start + inc.duration - this.time)
-      // Zona roja de Spark (penalización, sin incidente): la demora estimada es la
-      // penalización de la vía traducida a segundos al ritmo del vehículo.
-      const pen = edgePenalty(edge.a, edge.b, this.graphState)
-      if (pen > 0 && speed > 0) return pen / speed
-    }
-    return 8   // sin bloqueo ni zona roja identificable (p.ej. atasco puro): espera nominal
-  }
-
-  // choice: 'keep' | 'alternative' · source: 'usuario' | 'timeout'
-  resolveDecision(slot, vehicleId, choice, source = 'usuario') {
-    const offer = this.pendingOffers.get(slot)
-    if (!offer || offer.vehicleId !== vehicleId) return false
-    this.pendingOffers.delete(slot)
-    this.agents.setPaused(vehicleId, false)
-    this.offerCooldownUntil.set(vehicleId, Date.now() + OFFER_COOLDOWN_MS)
-    if (choice === 'alternative') this.agents.forceReroute(vehicleId, 'decision_usuario')
-
-    // Registro de la decisión (dato clave del análisis; a Kafka real en M5)
-    const entry = {
-      userId: slot, vehicleId, choice, source,
-      current_eta_s: r1(offer.currentEta), alt_eta_s: r1(offer.altEta),
-      ahorro_estimado_s: r1(offer.currentEta - offer.altEta),
-      ts: Date.now(),
-    }
-    this.decisions.push(entry)
-    kafka.send('route.decision', entry)
-    this.infoDirty = true   // el conteo de decisiones cambió → reenviar sim_info
-    console.log(`[sim${this.label}] decisión del Usuario ${slot}: ${choice} (${source})`)
-    return true
   }
 
   // Alerta al admin si un usuario configuró ruta pero nunca invocó su vehículo
@@ -315,7 +371,7 @@ export class Simulation {
     return true
   }
 
-  // Reset: mundo vacío, sin incidentes ni ofertas, tiempo a cero. Las CONFIGURACIONES
+  // Reset: mundo vacío, sin incidentes, tiempo a cero. Las CONFIGURACIONES
   // de flota/ruta se conservan; las alertas de invocación se rearman.
   _reset() {
     this.agents.resetAgents()
@@ -327,10 +383,9 @@ export class Simulation {
       agentSystem: this.agents, incidentManager: this.incidents,
       headless: true, metricsOnly: true, graphState: this.graphState,
     })
-    this.pendingOffers.clear()
-    this.offerCooldownUntil.clear()
     this.personalInvoked.clear()
     this.alertSent.clear()
+    this._driveStateSent.clear()   // resetAgents() borró los avatares: no hay estado que recordar
     for (const slot of this.routesByUser.keys()) this.routeSetAt.set(slot, Date.now())
     // Feed por-avatar y zonas rojas de Spark, frescos para la corrida nueva.
     // resetGraph() ya limpió las penalizaciones de las zonas rojas anteriores.
@@ -344,17 +399,14 @@ export class Simulation {
     this.running = true
   }
 
-  // Un tick de simulación (20 Hz). En pausa no avanza el mundo, pero las ofertas
-  // caducan por reloj de pared igualmente (default 'keep').
+  // Un tick de simulación (20 Hz). En pausa el mundo no avanza.
   step(dt) {
     this.tick++
-    for (const [slot, offer] of [...this.pendingOffers]) {
-      if (Date.now() >= offer.deadline) resolveTimeout(this, slot, offer)
-    }
     if (!this.running) return
     this.time += dt
     this.traffic.update(dt)
     this.agents.update(dt, this.time)
+    this._pumpDriveState()   // después de update(): el cruce ya se consumió y la intención ya se limpió
     this.incidents.update(dt, this.time)
     // ZoneSystem corre en modo SOLO MÉTRICAS (ver constructor): alimenta el
     // dashboard del admin (analytics.snapshot: heatmap de C, C̄, zona crítica)
@@ -445,7 +497,7 @@ export class Simulation {
     }
   }
 
-  // Config de la sala: flota + vehículo personal + decisiones de cada usuario.
+  // Config de la sala: flota y vehículo personal de cada usuario.
   simInfo() {
     const fleets = []
     for (const [slot, f] of this.agents.fleets) {
@@ -460,7 +512,6 @@ export class Simulation {
         personal: p
           ? { invoked: p.invoked, active: (p.remaining + p.pending > 0) || p.spawned > p.arrived, arrived: p.arrived }
           : { invoked: false, active: false, arrived: 0 },
-        decisions: this.decisions.filter(d => d.userId === slot).length,
       })
     }
     return { type: 'sim_info', run: this.run, running: this.running, incidentFreq: this.incidentFreq, tickHz: 20, fleets }
@@ -491,10 +542,6 @@ export class Simulation {
       rz,
     }
   }
-}
-
-function resolveTimeout(sim, slot, offer) {
-  sim.resolveDecision(slot, offer.vehicleId, 'keep', 'timeout')
 }
 
 // Penaliza (o limpia) todas las aristas de una zona en el estado del grafo de la

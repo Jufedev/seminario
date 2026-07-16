@@ -67,7 +67,7 @@ Un solo comando levanta el loop completo: **`make dev`** (Kafka → detector →
 | `red-points` | Kafka | detector Spark | servidor metaverso (`RedPointStore`) | Celdas con ≥ N avatares detenidos con permanencia media ≥ `MIN_MEAN_DWELL_S` |
 
 Los demás topics del metaverso (`agent.spawn`, `agent.reroute`, `agent.arrived`,
-`incident.start/end`, `route.decision`, `analytics.snapshot`, …) son internos de
+`incident.start/end`, `zone.red/clear`, `analytics.snapshot`, …) son internos de
 la simulación y NO forman parte de este contrato. En el cable viajan
 **consolidados en un único topic físico `sim-events`** (cada mensaje lleva su
 topic lógico en el campo `topic`): Event Hubs Standard limita el namespace a 10

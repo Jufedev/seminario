@@ -37,13 +37,14 @@ function edgeKind(aId, bId) {
   for (const e of (GRAPH[aId] || [])) if (e.to === bId) return e.kind
   return null
 }
-// Eje de circulación de cada tramo: 'carrera' = Norte-Sur, 'calle' = Este-Oeste
+// Eje de circulación de un tramo: 'carrera' = Norte-Sur, 'calle' = Este-Oeste
+function axisOf(aId, bId) {
+  const kind = edgeKind(aId, bId)
+  return kind === 'carrera' ? 'NS' : kind === 'calle' ? 'EW' : null
+}
 function computeAxes(path) {
   const axes = new Array(path.length - 1)
-  for (let k = 0; k < path.length - 1; k++) {
-    const kind = edgeKind(path[k], path[k + 1])
-    axes[k] = kind === 'carrera' ? 'NS' : kind === 'calle' ? 'EW' : null
-  }
+  for (let k = 0; k < path.length - 1; k++) axes[k] = axisOf(path[k], path[k + 1])
   return axes
 }
 
@@ -73,8 +74,8 @@ export class AgentSystem {
     // Casi todos los avatares de una flota comparten ruta → 1 Dijkstra por O/D.
     this._routeCache = new Map()
     this._redZoneChecker = () => false   // lo conecta la analítica de zonas (offline)
-    // Gancho M4: si devuelve true, el auto-reroute de ese avatar queda en manos de
-    // quien interceptó (el servidor pausa el vehículo personal y ofrece la decisión).
+    // Gancho opcional: si devuelve true, el auto-reroute de ese avatar queda en
+    // manos de quien intercepta. En null (por defecto) todos auto-rerutean.
     this.onRerouteIntercept = null
 
     // Aristas con avatares circulando ahora mismo → nº de avatares sobre cada una.
@@ -93,8 +94,24 @@ export class AgentSystem {
     const n = this.maxAgents
     this.active = new Uint8Array(n)
     this.state = new Uint8Array(n)
-    this.paused = new Uint8Array(n)           // M4: pausado mientras su dueño decide la ruta
+    this.paused = new Uint8Array(n)           // avatar detenido por quien intercepta su reruteo
     this.owner = new Int16Array(n).fill(-1)   // dueño (slot de usuario); -1 = sin asignar
+    // ── Conducción libre (M4: la enciende addFleet({ freeDrive: true }); hoy solo
+    //    el vehículo personal — ver server/simulation.js) ──
+    // TODA rama de conducción libre está detrás de `if (this.freeDrive[i])`, y este
+    // Uint8Array vale 0 para TODO avatar de flota. El comportamiento de flota queda
+    // idéntico bit a bit POR CONSTRUCCIÓN, no por inspección del código.
+    this.freeDrive = new Uint8Array(n)
+    // Destino real del avatar. La ruta de una conducción libre CRECE por delante, así
+    // que su último nodo es el lookahead y NO el destino: por eso se guarda aparte.
+    this.destNode = new Array(n)
+    this.intent = new Array(n)                // giro pedido, de un solo uso: 'straight'|'left'|'right'|null
+    // Acelerador: 1 = el dueño mantiene ↑. Un vehículo de conducción libre NO avanza
+    // solo — sin acelerador se comporta como frente a un semáforo en rojo. Sostenido
+    // (no un evento como `intent`): vale hasta que el dueño suelte la tecla.
+    // La REVERSA no existe por construcción, no por una guarda: el acelerador solo
+    // decide entre la velocidad normal y CERO, y _stepAgent clampea speed a >= 0.
+    this.throttle = new Uint8Array(n)
     this.pathNodes = new Array(n)
     this.pathAxis = new Array(n)
     this.segIndex = new Int32Array(n)
@@ -138,12 +155,14 @@ export class AgentSystem {
   // ── API de flotas (M3) ──
   // priority: true = sale ANTES que las flotas normales cuando compiten por el
   // mismo hueco de salida (M4: el vehículo personal no espera detrás de la flota)
-  addFleet(owner, { originId, destId, count = 10, spawnBatch = 5, spawnIntervalMs = 2000, priority = false }) {
+  // freeDrive: true = sus avatares conducen libre (ruta creciente y giros a pedido)
+  // en vez de seguir la ruta fija de Dijkstra. Por defecto false en todas las flotas.
+  addFleet(owner, { originId, destId, count = 10, spawnBatch = 5, spawnIntervalMs = 2000, priority = false, freeDrive = false }) {
     this.fleets.set(owner, {
       owner, originNode: originId, destNode: destId,
       count: Math.max(1, count), spawnBatch: Math.max(1, spawnBatch),
       spawnIntervalMs: Math.max(100, spawnIntervalMs),
-      priority,
+      priority, freeDrive,
       remaining: 0,     // cupos por soltar (los agrega cada invocación)
       pending: 0,       // cupos ya liberados por oleada, esperando hueco físico
       timerMs: 0,
@@ -300,6 +319,92 @@ export class AgentSystem {
     return min0 >= min1 ? 0 : 1                                           // el carril con más hueco
   }
 
+  // ════════════════════════════════════════════════════════════════
+  //  CONDUCCIÓN LIBRE — la encienden solo las flotas con freeDrive: true (hoy, el
+  //  vehículo personal de cada usuario). Toda flota normal sigue con freeDrive en 0.
+  //
+  //  Dos diferencias con un avatar de flota, y las dos las manda el dueño:
+  //   · NO AVANZA SOLO: solo se mueve con el acelerador puesto (`throttle`). Sin él,
+  //     _stepAgent lo trata como si tuviera el semáforo en rojo (ver `noThrottle`).
+  //   · NO SIGUE UNA RUTA FIJA: lleva una ruta que crece por delante, y en cada cruce
+  //     el dueño elige la salida (`intent`).
+  //
+  //  La invariante que hace barato lo segundo:
+  //
+  //      segIndex <= path.length - 3   (siempre ≥2 tramos sin consumir por delante)
+  //
+  //  Mientras se cumpla, _stepAgent NUNCA alcanza su rama terminal, nunca deja de
+  //  mirar el semáforo (que está detrás de `idx < path.length - 2`) y el
+  //  car-following, occupiedEdges y los carriles corren exactamente como hoy.
+  // ════════════════════════════════════════════════════════════════
+
+  // Nodo al que se llega cruzando `bId` en la dirección `dir`, habiendo entrado desde
+  // `aId`; null si ese giro no existe en la malla.
+  //
+  // Los ids son `${ci}_${ri}` sobre una cuadrícula COMPLETA: ci+1 = este, ri+1 = norte.
+  // Con esa orientación (ci = eje x, ri = eje y) el plano es el estándar matemático, así
+  // que girar +90° es antihorario = IZQUIERDA, y -90° horario = DERECHA:
+  //   recto    (dci, dri)      · izquierda (-dri, dci)      · derecha (dri, -dci)
+  // Comprobación: yendo al este (1,0) → izquierda da (0,1) = norte. Correcto.
+  //
+  // El giro en U no está: ninguna de las tres rotaciones produce (-dci,-dri). Es
+  // deliberado — un giro en U voltea la clave de grupo `a>b` a `b>a`, con lo que el
+  // vehículo dejaría de ver el tráfico de frente y lo atravesaría. En la malla completa
+  // siempre existe un giro legal (incluso en una esquina, de grado 2), así que nunca
+  // hace falta.
+  _neighborInDirection(aId, bId, dir) {
+    const a = NODES[aId], b = NODES[bId]
+    if (!a || !b) return null
+    const dci = b.ci - a.ci, dri = b.ri - a.ri
+    let ndci, ndri
+    if (dir === 'straight') { ndci = dci; ndri = dri }
+    else if (dir === 'left') { ndci = -dri; ndri = dci }
+    else if (dir === 'right') { ndci = dri; ndri = -dci }
+    else return null
+    const cId = `${b.ci + ndci}_${b.ri + ndri}`
+    // La malla manda: un candidato fuera del mapa no tiene arista y se descarta aquí
+    return (GRAPH[bId] || []).some(e => e.to === cId) ? cId : null
+  }
+
+  // Repone nodos al final de la ruta hasta sostener la invariante de ≥2 tramos por
+  // delante. Sin intención del usuario se sigue RECTO: quien invoca y no toca nada
+  // igual circula, hace fila y alimenta a Spark. Si el recto se sale del mapa, cae a
+  // derecha y luego a izquierda; en la malla completa (grado mínimo 2) una de las tres
+  // siempre existe, así que no hay callejones sin salida que manejar.
+  _extendLookahead(i) {
+    const path = this.pathNodes[i]
+    const axes = this.pathAxis[i]
+    while (path.length < this.segIndex[i] + 3) {
+      const k = path.length - 1
+      const next = this._neighborInDirection(path[k - 1], path[k], 'straight')
+        ?? this._neighborInDirection(path[k - 1], path[k], 'right')
+        ?? this._neighborInDirection(path[k - 1], path[k], 'left')
+      path.push(next)
+      // Incremental, NUNCA computeAxes() sobre una ruta que crece: axes[k] es el eje
+      // del tramo path[k] → path[k+1], que es justo el que acaba de nacer.
+      axes[k] = axisOf(path[k], next)
+    }
+  }
+
+  // Intención de giro de un solo uso. Reescribe path[segIndex+2]: el cruce que el
+  // vehículo tiene enfrente es path[segIndex+1], y el giro que tomará ALLÍ es
+  // precisamente path[segIndex+2] — por eso no hace falta ninguna ventana de commit.
+  // Reescribirlo no perturba nada: la clave de grupo y occupiedEdges leen
+  // path[segIndex] y path[segIndex+1], y el bloque de cruce lee nextA/nextB en el
+  // momento de cruzar. Por la invariante, path[segIndex+2] es SIEMPRE el último nodo.
+  // Devuelve false si el giro es ilegal: se ignora y se conserva el lookahead actual.
+  _applyIntent(i, dir) {
+    if (!this.freeDrive[i]) return false
+    const path = this.pathNodes[i]
+    const k = this.segIndex[i]
+    const next = this._neighborInDirection(path[k], path[k + 1], dir)
+    if (!next) return false
+    path[k + 2] = next
+    this.pathAxis[i][k + 1] = axisOf(path[k + 1], next)   // lo lee el semáforo del cruce
+    this.intent[i] = dir
+    return true
+  }
+
   // Devuelve true si el avatar quedó activo (o llegó de inmediato); false si no hay
   // ruta o no hay hueco todavía — el cupo NO se consume, se reintenta el próximo tick.
   _spawnOne(i, fleet) {
@@ -315,8 +420,21 @@ export class AgentSystem {
     this.active[i] = 1
     this.paused[i] = 0
     this.owner[i] = fleet.owner
-    this.pathNodes[i] = path
-    this.pathAxis[i] = computeAxes(path)
+    this.freeDrive[i] = fleet.freeDrive ? 1 : 0
+    this.intent[i] = null
+    // Nace QUIETO: el vehículo aparece en el origen y espera a su dueño. Arrancar
+    // acelerado le regalaría los primeros metros a un usuario que todavía no puso
+    // la mano en el teclado.
+    this.throttle[i] = 0
+    this.destNode[i] = path[path.length - 1]   // el destino REAL, antes de recortar la ruta
+    // `path` es el array de _routeCache, COMPARTIDO por todos los avatares con este O/D.
+    // Una conducción libre hace push() sobre su ruta: si recibiera el array de la caché
+    // la corrompería para todo avatar futuro con ese O/D, en silencio. Por eso arranca
+    // con una copia propia, sembrada con los dos primeros saltos de Dijkstra para que
+    // salga apuntando hacia su destino (_pickSpawnLane ya leyó path[0]/path[1]: los
+    // mismos valores, ningún cambio).
+    this.pathNodes[i] = this.freeDrive[i] ? path.slice(0, 3) : path
+    this.pathAxis[i] = computeAxes(this.pathNodes[i])
     this.segIndex[i] = 0
     this.segDist[i] = 0
     this.lane[i] = lane
@@ -335,6 +453,10 @@ export class AgentSystem {
 
     // Origen === destino (caso borde): llega en el mismo instante que sale
     if (path.length === 1) { this._arrive(i); return true }
+
+    // O/D adyacentes: la ruta sembrada se queda corta para la invariante de ≥2 tramos
+    // por delante y se completa con la continuación recta.
+    if (this.freeDrive[i]) this._extendLookahead(i)
 
     this.state[i] = AGENT_STATE.MOVING
     return true
@@ -358,12 +480,17 @@ export class AgentSystem {
       if (axis && !this.traffic.isGreenForAxis(path[idx + 1], axis)) lightStop = true
       if (isEdgeBlocked(path[idx + 1], path[idx + 2], this.graphState)) {
         blockStop = true
-        // M4: el vehículo personal ofrece la decisión apenas queda de frente al bloqueo
-        // (el gancho dedup-ea internamente: oferta pendiente/cooldown → no hace nada)
+        // Gancho opcional: avisa que este avatar quedó de frente a un bloqueo. Sin
+        // gancho instalado no hace nada y el avatar se comporta como siempre.
         this.onRerouteIntercept?.(i, 'bloqueado', path[idx + 1], path[idx + 2])
       }
     }
-    const mustStop = lightStop || blockStop
+    // Acelerador (solo conducción libre): sin ↑ mantenida el auto no avanza. Entra por
+    // mustStop y no por una rama aparte, y eso es lo que hace el cambio barato: el auto
+    // parado por su dueño es, para todo lo demás, un auto parado en un semáforo. Los de
+    // atrás le hacen fila, el car-following lo respeta y el carril no se toca.
+    const noThrottle = this.freeDrive[i] === 1 && this.throttle[i] === 0
+    const mustStop = lightStop || blockStop || noThrottle
 
     // Car-following: no puedo pasar al de adelante en mi mismo tramo+carril.
     // Se salta líderes que ya cruzaron a otro tramo este mismo frame (su segDist
@@ -407,6 +534,22 @@ export class AgentSystem {
       const len = Math.hypot(nb.x - na.x, nb.z - na.z)
       if (this.segDist[i] < len - SEG_EPS) break
 
+      // Conducción libre: el nodo que está por pisar ES su destino. NO se llama a
+      // _arrive() aquí — _arrive da por hecho que path[path.length-1] es el destino, y
+      // con una ruta creciente sumaría el tramo equivocado a distTraveled y teletransportaría
+      // el carro hasta el lookahead. En vez de eso se recorta la ruta para que el destino
+      // pase a ser su último nodo, y se deja caer la ejecución al chequeo terminal de
+      // abajo: allí path.length - 2 === ii === idx y _arrive dispara POR EL CAMINO NORMAL,
+      // con la suma del último tramo hecha una sola vez y el snap sobre el destino real.
+      // El recorte es IN SITU a propósito: `path` es una referencia local que el chequeo
+      // terminal vuelve a leer, así que reasignar this.pathNodes[i] no se vería. Es seguro
+      // porque en conducción libre el array es propio del avatar, nunca el de _routeCache.
+      if (this.freeDrive[i] && path[ii + 1] === this.destNode[i]) {
+        path.length = ii + 2
+        this.segDist[i] = len
+        break
+      }
+
       const nextA = path[ii + 1], nextB = path[ii + 2]
       // NUNCA entrar a un tramo bloqueado por incidente: espera en el nodo
       if (isEdgeBlocked(nextA, nextB, this.graphState)) { this.segDist[i] = len; break }
@@ -435,6 +578,12 @@ export class AgentSystem {
       // se registra en el grupo nuevo para que quien cruce después lo respete
       if (!ng) { ng = []; groups.set(nextKey, ng) }
       ng.push(i)   // entra con el segDist más bajo → mantiene el orden descendente del grupo
+      // Cruzó: la intención de giro ya se consumió (era de un solo uso) y hay que reponer
+      // el nodo que sostiene la invariante de ≥2 tramos por delante. Sin intención nueva,
+      // el lookahead sigue recto. La ruta crece ~1 nodo por cruce y son máximo 3 vehículos
+      // (~75 nodos en 10 min): no se recorta por detrás a propósito — habría que rebasar
+      // segIndex en un punto seguro del tick, complejidad comprada con nada.
+      if (this.freeDrive[i]) { this.intent[i] = null; this._extendLookahead(i) }
     }
     idx = this.segIndex[i]
     const na = NODES[path[idx]], nb = NODES[path[idx + 1]]
@@ -453,14 +602,19 @@ export class AgentSystem {
     // Atasco: NO cuenta si está parado legítimamente (semáforo en rojo o fila normal).
     // Un stop por tramo bloqueado SÍ acumula: así reintenta rerutear cada STUCK_TIME
     // hasta encontrar alternativa o hasta que el incidente expire.
-    if (lightStop || queued) { this.stuckTimer[i] = 0; this.stuckAccum[i] = 0; return }
+    // Un auto parado por su dueño (sin acelerador) NO está atascado: es la parada más
+    // legítima que hay. Va con lightStop y NO con blockStop, que sí acumula a propósito
+    // para reintentar el reruteo. Sin esto, soltar la tecla diez segundos haría que el
+    // vehículo se declarara atascado él solo.
+    if (lightStop || queued || noThrottle) { this.stuckTimer[i] = 0; this.stuckAccum[i] = 0; return }
     this.stuckTimer[i] += dt
     if (this.stuckTimer[i] < 1) return
     const moved = Math.hypot(this.posX[i] - this.lastCheckX[i], this.posZ[i] - this.lastCheckZ[i])
     if (moved < 0.15) {
       this.stuckAccum[i] += this.stuckTimer[i]
       if (this.stuckAccum[i] >= SIM_CONFIG.STUCK_TIME) {
-        // M4: el vehículo personal no auto-rerutea — su dueño decide (oferta de 5s)
+        // Si un gancho asume el manejo del atasco, el avatar no auto-rerutea.
+        // Sin gancho (caso normal) se rerutea solo.
         if (this.onRerouteIntercept?.(i, 'atascado')) { this.stuckAccum[i] = 0 }
         else this._triggerReroute(i, 'atascado')
       }
@@ -504,7 +658,7 @@ export class AgentSystem {
       for (let k = this.segIndex[i] + 1; k < path.length; k++) {
         if (set.has(path[k])) { crosses = true; break }
       }
-      // M4: el vehículo personal tampoco auto-rerutea por zona roja — decide su dueño
+      // Sin gancho instalado, todo avatar que cruce la zona roja se desvía.
       if (crosses && !this.onRerouteIntercept?.(i, 'zona_roja')) this._triggerReroute(i, 'zona_roja')
     }
   }
@@ -517,7 +671,7 @@ export class AgentSystem {
       const path = this.pathNodes[i]
       for (let k = this.segIndex[i] + 1; k < path.length - 1; k++) {
         if ((path[k] === aId && path[k + 1] === bId) || (path[k] === bId && path[k + 1] === aId)) {
-          // M4: el vehículo personal no auto-rerutea — su dueño decide (oferta de 5s)
+          // Sin gancho instalado, todo avatar afectado por el incidente se desvía.
           if (!this.onRerouteIntercept?.(i, 'incidente', aId, bId)) this._triggerReroute(i, 'incidente')
           break
         }
@@ -525,10 +679,11 @@ export class AgentSystem {
     }
   }
 
-  // ── M4: soporte de la decisión de los 5 segundos ──
+  // ── Soporte para quien intercepta el reruteo de un avatar ──
+  // Detiene (o suelta) un solo avatar: el resto del mundo sigue su curso.
   setPaused(i, v) { this.paused[i] = v ? 1 : 0 }
 
-  // El usuario eligió "alternativa": recalcular ruta YA (evitando bloqueos actuales)
+  // Recalcular la ruta YA, evitando los bloqueos actuales.
   forceReroute(i, motivo = 'decision_usuario') { this._triggerReroute(i, motivo) }
 
   // Distancia restante sobre la ruta actual (unidades de mundo) — para las ETAs
@@ -572,6 +727,10 @@ export class AgentSystem {
       this.active[i] = 0
       this.paused[i] = 0
       this.owner[i] = -1
+      this.freeDrive[i] = 0
+      this.throttle[i] = 0   // que un slot reusado no herede el acelerador del anterior
+      this.destNode[i] = null
+      this.intent[i] = null
       this.pathNodes[i] = null
       this.pathAxis[i] = null
       this._writeHidden(i)

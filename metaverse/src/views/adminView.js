@@ -75,7 +75,7 @@ export function renderAdminView(app) {
         <div class="dash-card">
           <h4>Desglose por usuario</h4>
           <table class="dash-table" id="d-users">
-            <tr><th>U</th><th>Llegados</th><th>t̄ (s)</th><th>K/A/⏱</th><th>Ahorro</th><th>Efic.</th><th>Rerutas</th></tr>
+            <tr><th>U</th><th>Llegados</th><th>t̄ (s)</th><th>Efic.</th><th>Rerutas</th></tr>
           </table>
           <div id="d-rank" style="font-size:11px;color:var(--text-dim);margin-top:6px">—</div>
         </div>
@@ -135,7 +135,7 @@ export function renderAdminView(app) {
         const route = f.origin && f.dest ? `${f.origin} → ${f.dest}` : 'sin ruta'
         const status = f.invoked ? `${f.spawned}/${f.count} · llegaron ${f.arrived}` : 'sin invocar'
         const pers = f.personal.active ? '🚗 en vía' : f.personal.arrived > 0 ? '🚗 llegó' : '🚗 —'
-        return `<span style="color:${color}">■</span> U${f.slot}: ${route} · ${status} · ${pers} · decisiones: ${f.decisions ?? 0}`
+        return `<span style="color:${color}">■</span> U${f.slot}: ${route} · ${status} · ${pers}`
       }).join('<br>')
       // si el personal de un usuario alertado ya está activo, retirar su alerta
       for (const f of m.fleets) if (f.personal.active) view.querySelector(`#alert-u${f.slot}`)?.remove()
@@ -234,21 +234,18 @@ export function renderAdminView(app) {
       const tr = document.createElement('tr')
       const trophies = [
         m.rankings.fastestFleet === p.slot ? '🥇' : '',
-        m.rankings.bestDecider === p.slot ? '🧠' : '',
         m.rankings.mostCongested === p.slot ? '🐌' : '',
       ].join('')
       tr.innerHTML = `
         <td style="color:${OWNER_COLORS[p.slot] ?? '#94a3b8'}">■ U${p.slot} ${trophies}</td>
         <td>${p.fleet.arrived}/${p.fleet.spawned}</td>
         <td>${p.fleet.avgTravel_s ?? '—'}</td>
-        <td>${p.decisions.keep}/${p.decisions.alternative}/${p.decisions.timeout}</td>
-        <td>${p.savings_s}s</td>
         <td>${p.efficiency != null ? p.efficiency.toFixed(2) : '—'}</td>
         <td>${p.reroutes}</td>`
       table.appendChild(tr)
     }
     view.querySelector('#d-rank').textContent =
-      '🥇 flota más rápida · 🧠 mejor decisor (ahorro) · 🐌 más congestión sufrida'
+      '🥇 flota más rápida · 🐌 más congestión sufrida'
     view.querySelector('#d-critical').textContent = m.critical
       ? `crítica: ${m.critical.label} (C̄ ${m.critical.avgC})` : 'crítica: —'
     // Bordes rojos del heatmap desde las zonas rojas de Spark (no las del ZoneSystem).

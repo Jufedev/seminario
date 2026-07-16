@@ -316,14 +316,14 @@ umbral, y la zona roja se pintaría **al lado** del atasco.
 |---|---|---|---|
 | `avatar-positions` | servidor | **Spark** | Una posición por avatar por segundo. **Contrato con el Big Data.** |
 | `red-points` | **Spark** | servidor | Las celdas detectadas como zona roja. **Contrato con el Big Data.** |
-| `sim-events` | servidor | servidor (dashboard) | **11 topics lógicos internos** consolidados en uno. |
+| `sim-events` | servidor | servidor (dashboard) | **10 topics lógicos internos** consolidados en uno. |
 
 Los eventos internos de la simulación (`agent.spawn`, `incident.start`,
-`analytics.snapshot`, `route.decision`, …) **no son parte del contrato con el Big
+`analytics.snapshot`, `agent.reroute`, …) **no son parte del contrato con el Big
 Data**: alimentan el dashboard del admin.
 
 **¿Por qué consolidados?** Event Hubs Standard **limita el namespace a 10 event hubs**.
-11 topics internos + 2 del contrato = 13. No entran. Así que los internos viajan todos
+10 topics internos + 2 del contrato = 12. No entran. Así que los internos viajan todos
 por `sim-events` y **cada mensaje lleva su topic lógico adentro**, en el campo `topic`.
 El consumidor lo desenvuelve y lo re-despacha. Total: **3 topics físicos**.
 

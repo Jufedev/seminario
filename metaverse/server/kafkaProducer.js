@@ -1,7 +1,7 @@
 // ════════════════════════════════════════════════════════════════
 //  PUENTE KAFKA (M5) — el servidor publica TODOS los eventos de la
 //  simulación a topics de Kafka (room.lifecycle, agent.*, incident.*,
-//  route.decision, zone.*, analytics.snapshot).
+//  zone.*, analytics.snapshot).
 //
 //  Modos (se decide al conectar, se ve en el log):
 //   · 'kafka': broker real en localhost:9092 (docker compose up -d).
@@ -18,10 +18,13 @@ import { Kafka, logLevel } from 'kafkajs'
 import { kafka as engineBus } from '../src/kafka/producer.js'
 import { kafkaConfig, kafkaBrokers } from './kafkaConfig.js'
 
+// Los topics lógicos que el servidor emite de verdad. Esta lista no crea ni valida
+// nada (un send con otro nombre se consolida igual): es el inventario, y su largo
+// es lo que el log reporta. Por eso vale mantenerla honesta — un topic acá que
+// nadie produzca es una mentira sobre lo que fluye por el cable.
 export const TOPICS = [
   'room.lifecycle',
   'agent.spawn', 'agent.position', 'agent.arrived', 'agent.reroute',
-  'route.decision',
   'incident.start', 'incident.end',
   'zone.red', 'zone.clear',
   'analytics.snapshot',
@@ -35,7 +38,7 @@ export const INGEST_TOPICS = ['avatar-positions', 'red-points']
 // En el CABLE, los topics internos de TOPICS viajan CONSOLIDADOS en un único
 // topic físico: cada mensaje lleva su topic lógico en el campo `topic`.
 // Motivo: Event Hubs Standard permite máximo 10 event hubs por namespace y
-// TOPICS+INGEST suman 13 — los que no se crearan harían fallar la suscripción
+// TOPICS+INGEST suman 12 — los que no se crearan harían fallar la suscripción
 // del consumidor y degradarían el bridge entero a modo local (sin Spark).
 // Físicos en total: sim-events + avatar-positions + red-points = 3.
 export const SIM_EVENTS_TOPIC = 'sim-events'

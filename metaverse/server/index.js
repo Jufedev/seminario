@@ -7,11 +7,14 @@
 //  Protocolo saliente:  room_joined | room_state | join_error
 //                       + sim_info | world_snapshot (por sala)
 //                       + chat_message (efímero, sin Kafka: ver chat.js)
+//                       + drive_state (dirigido al dueño del vehículo personal,
+//                         solo cuando cambia: ~1 por cruce, NO va en el snapshot)
 //  Arrancar con: make metaverse-server
 // ════════════════════════════════════════════════════════════════
 import { WebSocketServer } from 'ws'
 import { RoomManager } from './rooms.js'
 import { buildChatMessage, ChatRateLimiter } from './chat.js'
+import { MinIntervalLimiter } from './rateLimit.js'
 import { KafkaBridge } from './kafkaProducer.js'
 import { AnalyticsConsumer } from '../analytics/consumer.js'
 import { RedPointStore } from '../analytics/redPoints.js'
@@ -23,6 +26,10 @@ console.debug = () => {}
 const PORT = 8080
 const TICK_HZ = 20
 const ANALYTICS_EMIT_MS = 1000   // cadencia de admin_analytics
+// Piso entre intenciones de giro de un mismo socket. drive_intent es un evento por
+// cruce (~1 cada 8 s), no un eje de control: 50 ms sobran para cualquier volante
+// humano y le ponen techo a un cliente roto que quiera inundar el tick.
+const DRIVE_INTENT_MIN_MS = 50
 
 // ── M5: productor Kafka (o bus local si no hay broker) + consumidor analítico ──
 const bridge = new KafkaBridge()
@@ -43,6 +50,7 @@ function send(ws, obj) { if (ws.readyState === 1) ws.send(JSON.stringify(obj)) }
 wss.on('connection', (ws, req) => {
   ws._room = null   // sala a la que pertenece este socket (null hasta join_room)
   ws._chatRate = new ChatRateLimiter()   // higiene de inundación del chat, por socket
+  ws._driveRate = new MinIntervalLimiter(DRIVE_INTENT_MIN_MS)   // ídem para el volante
   console.log(`[ws] conexión (${req.socket.remoteAddress}) · sockets: ${wss.clients.size}`)
 
   ws.on('message', data => {
@@ -66,12 +74,18 @@ wss.on('connection', (ws, req) => {
       if (msg.type === 'set_route' && sim.setUserRoute(ws._slot, msg.origin, msg.dest)) room.broadcast(sim.simInfo())
       else if (msg.type === 'set_fleet' && sim.setUserFleet(ws._slot, msg)) room.broadcast(sim.simInfo())
       else if (msg.type === 'invoke_fleet' && sim.invokeFleet(ws._slot)) room.broadcast(sim.simInfo())
-      // invoke_vehicle = el VEHÍCULO PERSONAL (el de la decisión de 5s), como en el doc
+      // invoke_vehicle = el VEHÍCULO PERSONAL del usuario, como en el doc
       else if (msg.type === 'invoke_vehicle' && sim.invokePersonal(ws._slot, 'usuario')) room.broadcast(sim.simInfo())
-      else if (msg.type === 'route_decision' &&
-               sim.resolveDecision(ws._slot, msg.vehicleId, msg.choice === 'alternative' ? 'alternative' : 'keep', 'usuario')) {
-        sim.infoDirty = false
-        room.broadcast(sim.simInfo())
+      // drive_intent = giro pedido para SU vehículo personal. No hay broadcast: el
+      // acuse es el drive_state que la simulación encola al dueño por el outbox.
+      else if (msg.type === 'drive_intent' && ws._driveRate.allow()) sim.setDriveIntent(ws._slot, msg.dir)
+      // drive_throttle = acelerador SOSTENIDO (dos mensajes por pisada, no 20 Hz).
+      // El piso se aplica solo al acelerar: descartar un `off` dejaría el vehículo
+      // acelerando solo hasta el próximo mensaje, y ese es el peor error posible acá
+      // — soltar la tecla SIEMPRE tiene que llegar. Descartar un `on` de más no
+      // cuesta nada: el auto se queda quieto, que es su estado por defecto.
+      else if (msg.type === 'drive_throttle' && (!msg.on || ws._driveRate.allow())) {
+        sim.setDriveThrottle(ws._slot, !!msg.on)
       }
     } else if (ws._role === 'admin') {
       if (msg.type === 'admin_set_incidents') { sim.setIncidentFreq(msg.freq); room.broadcast(sim.simInfo()) }
@@ -86,6 +100,9 @@ wss.on('connection', (ws, req) => {
   ws.on('close', () => {
     const room = ws._room
     if (room) {
+      // Se cayó con el acelerador pisado: el `off` de la tecla no va a llegar nunca.
+      // Sin esto el vehículo sigue acelerando solo, sin dueño, hasta su destino.
+      if (ws._role === 'user') room.sim?.setDriveThrottle(ws._slot, false)
       room.leave(ws)
       room.broadcastState()
       bridge.publish('room.lifecycle', { room: room.code, action: 'leave', role: ws._role, userId: ws._slot })
@@ -150,11 +167,7 @@ setInterval(() => {
       redStore.markReset(room.code)
       room.broadcast(room.sim.simInfo())
     }
-    if (room.sim.infoDirty) {                  // p.ej. una oferta caducó (decisión por timeout)
-      room.sim.infoDirty = false
-      room.broadcast(room.sim.simInfo())
-    }
-    // Mensajes dirigidos: ofertas de ruta al usuario dueño, alertas al admin
+    // Mensajes dirigidos: alertas al admin
     for (const out of room.sim.drainOutbox()) {
       if (out.to === 'admin') { if (room.admin) send(room.admin, out.msg) }
       else { const u = room.users[out.to - 1]; if (u) send(u.ws, out.msg) }

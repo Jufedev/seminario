@@ -59,14 +59,6 @@ export function renderUserView(app) {
       </div>
       <button class="btn secondary" id="btn-leave">← Salir de la sala</button>
     </div>
-    <div id="decision-card" class="decision-card panel hidden">
-      <h3>⚠️ Atasco en tu ruta — decide en <span id="dc-secs">5.0</span>s</h3>
-      <div class="dc-bar"><div id="dc-fill"></div></div>
-      <div class="dc-buttons">
-        <button class="btn secondary" id="dc-keep">🛑 Seguir mi ruta<br><small id="dc-eta-keep">—</small></button>
-        <button class="btn" id="dc-alt">🔀 Tomar alternativa<br><small id="dc-eta-alt">—</small></button>
-      </div>
-    </div>
     <div id="dc-note" class="dc-note hidden"></div>
     ${CHAT_PANEL_HTML}
   `
@@ -140,13 +132,9 @@ export function renderUserView(app) {
     congelarPuntos()
   })
 
-  // ── Tarjeta de decisión (route_offer → 5 segundos → route_decision) ──
-  const card = view.querySelector('#decision-card')
+  // ── Aviso efímero sobre el mapa: aparece unos segundos y se retira solo ──
   const note = view.querySelector('#dc-note')
-  let currentOffer = null
-  let cdTimer = null
   let noteTimer = null
-  const fmtEta = s => s >= 90 ? `${Math.floor(s / 60)}m ${Math.round(s % 60)}s` : `~${Math.round(s)}s`
 
   function showNote(text) {
     note.textContent = text
@@ -154,37 +142,6 @@ export function renderUserView(app) {
     clearTimeout(noteTimer)
     noteTimer = setTimeout(() => note.classList.add('hidden'), 3500)
   }
-  function hideCard() {
-    card.classList.add('hidden')
-    clearInterval(cdTimer)
-    cdTimer = null
-    currentOffer = null
-  }
-  function showOffer(m) {
-    currentOffer = m
-    view.querySelector('#dc-eta-keep').textContent = `atasco · ETA ${fmtEta(m.currentEta)}`
-    view.querySelector('#dc-eta-alt').textContent = `ETA ${fmtEta(m.altEta)}`
-    card.classList.remove('hidden')
-    clearInterval(cdTimer)
-    cdTimer = setInterval(() => {
-      const left = m.deadline - Date.now()
-      if (left <= 0) {   // sin respuesta: el servidor aplica 'keep' por defecto
-        hideCard()
-        showNote('⏱️ Sin respuesta: sigues tu ruta (esperando el atasco)')
-        return
-      }
-      view.querySelector('#dc-secs').textContent = (left / 1000).toFixed(1)
-      view.querySelector('#dc-fill').style.width = `${(left / 5000) * 100}%`
-    }, 100)
-  }
-  function decide(choice) {
-    if (!currentOffer) return
-    session.socket.send({ type: 'route_decision', userId: session.slot, vehicleId: currentOffer.vehicleId, choice })
-    hideCard()
-    showNote(choice === 'alternative' ? '🔀 Tomando la ruta alternativa' : '🛑 Sigues tu ruta original')
-  }
-  view.querySelector('#dc-keep').addEventListener('click', () => decide('keep'))
-  view.querySelector('#dc-alt').addEventListener('click', () => decide('alternative'))
 
   // ── Estado que llega del servidor ──
   function showSimInfo(m) {
@@ -226,13 +183,11 @@ export function renderUserView(app) {
     session.on('world_snapshot', m => world.pushSnapshot(m)),
     session.on('sim_info', showSimInfo),
     session.on('room_state', showMembers),
-    session.on('route_offer', showOffer),
     wireChatPanel(view, world),
   ]
 
   window.__teardownView = () => {
     subs.forEach(off => off())
-    clearInterval(cdTimer)
     clearTimeout(noteTimer)
     world.dispose()
   }
