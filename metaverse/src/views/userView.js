@@ -6,7 +6,9 @@ import { CHAT_PANEL_HTML, wireChatPanel } from './chatPanel.js'
 import { wireCopyButton } from '../ui/clipboard.js'
 import { wireCollapseToggle } from '../ui/collapse.js'
 import { memberRow } from '../ui/memberRow.js'
-import { fleetButtonDisabled } from './fleetButton.js'
+import {
+  fleetButtonDisabled, personalButtonDisabled, personalButtonLabel, routeSelectsDisabled,
+} from './invokeLocks.js'
 
 // ════════════════════════════════════════════════════════════════
 //  VISTA USUARIO (M3) — SOLO 2D cenital. El usuario controla SU flota:
@@ -115,14 +117,27 @@ export function renderUserView(app) {
   slEvery.addEventListener('change', sendFleet)
   function updateSpawnLbl() { view.querySelector('#lbl-spawn').textContent = `${slBatch.value} cada ${slEvery.value}s` }
 
+  // Invocar congela los puntos: entre el clic y el sim_info de vuelta hay un
+  // viaje de ida y vuelta, y un cambio de ruta colado ahí dejaría a los
+  // vehículos rodando por la ruta vieja. Se bloquean de inmediato; el sim_info
+  // confirma el bloqueo (o lo levanta, si el admin reinició la sala).
+  function congelarPuntos() {
+    selOrigin.disabled = true
+    selDest.disabled = true
+  }
+
   // invoke_vehicle = MI vehículo personal (el de la decisión de 5s); invoke_fleet = la flota
-  btnPersonal.addEventListener('click', () => session.socket.send({ type: 'invoke_vehicle', userId: session.slot }))
+  btnPersonal.addEventListener('click', () => {
+    session.socket.send({ type: 'invoke_vehicle', userId: session.slot })
+    btnPersonal.disabled = true
+    congelarPuntos()
+  })
   // La flota se invoca una sola vez por corrida: se bloquea de inmediato para no
-  // encolar otra tanda con doble clic, y el sim_info de vuelta confirma el bloqueo
-  // (o lo levanta, si el admin reinició la sala).
+  // encolar otra tanda con doble clic.
   btnFleet.addEventListener('click', () => {
     session.socket.send({ type: 'invoke_fleet', userId: session.slot })
     btnFleet.disabled = true
+    congelarPuntos()
   })
 
   // ── Tarjeta de decisión (route_offer → 5 segundos → route_decision) ──
@@ -177,17 +192,20 @@ export function renderUserView(app) {
     const mine = m.fleets.find(f => f.slot === session.slot)
     if (mine) {
       // El estado del vehículo personal lo carga el propio botón: sin fila que
-      // lo repita, el rótulo es el que dice si va en camino.
-      const p = mine.personal
-      btnPersonal.disabled = !(mine.origin && mine.dest) || p.active
-      btnPersonal.textContent = p.active ? '🚗 Mi vehículo va en camino' : '🚗 Invocar MI vehículo'
+      // lo repita, el rótulo es el que dice si va en camino o si ya llegó.
+      btnPersonal.disabled = personalButtonDisabled(mine)
+      btnPersonal.textContent = personalButtonLabel(mine)
       // sincronizar controles si el server ya tenía config (reconexión / otra pestaña)
       if (mine.origin && !selOrigin.value) selOrigin.value = mine.origin
       if (mine.dest && !selDest.value) selDest.value = mine.dest
     }
-    // Bloqueo de la flota: lo decide el servidor (fleets[].invoked), que el reset
-    // del admin vuelve a false. Ver fleetButton.js.
+    // Los tres bloqueos los decide el servidor (fleets[].invoked y
+    // fleets[].personal.invoked), que el reset del admin vuelve a false.
+    // Ver invokeLocks.js.
     btnFleet.disabled = fleetButtonDisabled(mine)
+    const puntosFijos = routeSelectsDisabled(mine)
+    selOrigin.disabled = puntosFijos
+    selDest.disabled = puntosFijos
   }
   // ── En la sala ──
   // El punto de color ya dice qué slot es cada quien: la fila lleva el nombre,

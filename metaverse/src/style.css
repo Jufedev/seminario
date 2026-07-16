@@ -94,6 +94,10 @@ input[type="range"] {
   width: 100%; padding: 8px 10px; border-radius: 8px; font-family: inherit; font-size: 12px;
   background: rgba(255,255,255,0.06); color: var(--text); border: 1px solid var(--panel-border);
 }
+/* Los puntos se congelan al invocar y solo el reinicio los libera: hay que VERLO.
+   El gris que el navegador le pone a un select deshabilitado no se ve acá, porque
+   la regla de arriba le fija fondo y color propios. Mismo trato que .btn:disabled. */
+.od-selects select:disabled { opacity: .4; cursor: not-allowed; }
 .od-selects select option, .od-selects select optgroup { background: #101828; color: var(--text); }
 .spawn-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .spawn-pair .mini-lbl { font-size: 11px; color: var(--text-dim); margin-bottom: 4px; }
