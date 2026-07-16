@@ -74,9 +74,11 @@ consume: ## Tail a topic from the console (TOPIC=red-points by default)
 
 # --- Big Data pipeline (the detector of record) -----------------------------
 
-test: ## Run the Python detector tests (detection logic + JS→Spark parsing seam; no Kafka needed)
+test: ## Run the Python detector tests (detection logic + JS→Spark parsing seam + H1 measurement; no Kafka needed)
 	$(PYTHON) tests/test_detection_logic.py
 	$(PYTHON) tests/test_position_parsing.py
+	$(PYTHON) tests/test_h1_measurement.py
+	$(PYTHON) tests/test_h1_sweep.py
 
 detector: ## Run the Spark red-point detector (reads .env for broker + grid)
 	CELL_SIZE_X=$(CELL_SIZE_X) CELL_SIZE_Y=$(CELL_SIZE_Y) \
