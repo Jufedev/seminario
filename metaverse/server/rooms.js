@@ -94,14 +94,21 @@ export class RoomManager {
   get(code) { return this.rooms.get(code) ?? null }
   all() { return this.rooms.values() }
 
-  // Limpieza periódica de salas abandonadas (la llama el loop de tick)
+  // Limpieza periódica de salas abandonadas (la llama el loop de tick).
+  // DEVUELVE los códigos destruidos: `create()` recicla el código de una sala
+  // muerta (solo evita los de las VIVAS), así que todo lo que esté indexado por
+  // código afuera de este mapa tiene que enterarse para no heredárselo a la sala
+  // nueva. Ver redStore.forgetRoom en index.js.
   sweep() {
     const now = Date.now()
+    const destruidas = []
     for (const [code, room] of this.rooms) {
       if (room.emptySince != null && now - room.emptySince > EMPTY_ROOM_TTL_MS) {
         this.rooms.delete(code)
+        destruidas.push(code)
         console.log(`[room] sala ${code} destruida por inactividad · salas activas: ${this.rooms.size}`)
       }
     }
+    return destruidas
   }
 }

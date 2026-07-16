@@ -176,7 +176,9 @@ setInterval(() => {
     if (room.sim.running) room.sim.maybeSampleAvatarPositions(dt, room.code)
     room.broadcast(room.sim.snapshot())
   }
-  rooms.sweep()
+  // Las salas destruidas se olvidan también en el store de zonas rojas: su código
+  // se recicla, y lo que quede indexado ahí se lo heredaría la próxima sala.
+  for (const code of rooms.sweep()) redStore.forgetRoom(code)
 }, 1000 / TICK_HZ)
 
 // ── Emisión de analítica (cada ~1s): el consumidor agrega, el server la manda al

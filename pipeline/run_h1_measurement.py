@@ -74,10 +74,16 @@ def main() -> None:
     spark.sparkContext.setLogLevel("ERROR")
 
     positions = spark.read.parquet(args.archive)
+    all_rooms = sorted(r["room"] for r in positions.select("room").distinct().collect())
     if args.room:
         positions = positions.filter(positions.room == args.room)
     n = positions.count()
     if n == 0:
+        # Two different failures, two different diagnoses: a room filter that matches
+        # nothing is a typo, not an empty archive, and telling the researcher to go
+        # check whether the simulation was running would send them to the wrong place.
+        if args.room and all_rooms:
+            sys.exit(f"no positions for room {args.room!r}. The archive holds: {', '.join(all_rooms)}")
         sys.exit("the archive is empty — no positions were captured. Was a simulation running?")
     rooms = [r["room"] for r in positions.select("room").distinct().collect()]
     tmin, tmax = positions.selectExpr("min(event_time)", "max(event_time)").first()
@@ -114,6 +120,18 @@ def main() -> None:
     Path(args.csv).write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(f"\nWrote {args.csv}")
     spark.stop()
+
+    # An archive with no jam in it produces a table of dashes and zeros that looks
+    # exactly like a finished measurement. Say so out loud and exit non-zero: a
+    # curve of nothing quietly filed as a result is the worst outcome this script
+    # has, and the project's rule is to fail loudly rather than degrade in silence.
+    if all(r["mean_latency_s"] is None for r in results):
+        sys.exit(
+            "\nMEASURED NOTHING: no window detected a single congested cell.\n"
+            "The archive holds positions but no jam that crosses the thresholds "
+            f"(avatars>={params['min_avatars']}, dwell>={params['min_dwell_s']}s). "
+            "Capture a run where red zones actually appeared."
+        )
 
 
 if __name__ == "__main__":

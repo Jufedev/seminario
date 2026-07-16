@@ -157,6 +157,25 @@ export class RedPointStore {
     this.lastDetectionAt.set(key, Date.now())
   }
 
+  // La sala murió (barrido de salas vacías): se olvida TODO lo que este store
+  // tenga indexado por su código.
+  //
+  // No es higiene, es corrección: `RoomManager.create()` evita los códigos de las
+  // salas VIVAS, así que el de una sala destruida se recicla. Sin esto, la sala
+  // nueva que caiga en ese código heredaría los contadores del detector de una
+  // sesión ajena y ya muerta — y el tablero, cuyo único trabajo es reportar lo que
+  // cazó Spark, le mostraría al jurado bloqueos que nadie detectó en esta corrida.
+  // El TTL no salva a `detectedCells`/`lastDetectionAt`: son acumulados de la
+  // corrida, no estado vivo, y por eso no vencen solos.
+  //
+  // La clave GLOBAL no se toca: no es de ninguna sala.
+  forgetRoom(roomCode) {
+    this.zones.delete(roomCode)
+    this.resetAt.delete(roomCode)
+    this.detectedCells.delete(roomCode)
+    this.lastDetectionAt.delete(roomCode)
+  }
+
   // Actividad del detector Spark para el tablero del admin, POR SALA (suma la
   // clave global). `total` = bloqueos distintos cazados en la corrida; `lastAgoMs`
   // = hace cuánto fue la última detección (null si todavía no hubo ninguna).

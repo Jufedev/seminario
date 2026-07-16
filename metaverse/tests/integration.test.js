@@ -184,6 +184,55 @@ describe('RedPointStore (red-points de Spark → zonas activas por sala)', () =>
     store._ingest(sparkRedPointAt('ECCI-1234', 'no-es-fecha'))
     expect(store.activeZonesFor('ECCI-1234')).toContain(zoneIndexAt(0, 0))
   })
+
+  // Actividad del detector para el tablero: bloqueos DISTINTOS cazados y cuándo
+  // fue el último. Es lo que el metaverso no puede medirse solo.
+  test('detectionStatsFor cuenta celdas distintas, no re-emisiones', () => {
+    const store = new RedPointStore({ bridge: fakeBridge() })
+    store._ingest(sparkRedPoint(0, 0, 'ECCI-1234'))
+    store._ingest(sparkRedPoint(0, 0, 'ECCI-1234'))     // Spark re-emite la misma celda por slide
+    store._ingest(sparkRedPoint(60, 60, 'ECCI-1234'))   // otra celda: ese sí es otro bloqueo
+    const st = store.detectionStatsFor('ECCI-1234')
+    expect(st.total).toBe(2)
+    expect(st.lastAgoMs).toBeGreaterThanOrEqual(0)
+  })
+
+  test('sin detecciones, detectionStatsFor no miente: total 0 y sin última', () => {
+    const store = new RedPointStore({ bridge: fakeBridge() })
+    expect(store.detectionStatsFor('ECCI-1234')).toEqual({ total: 0, lastAgoMs: null })
+  })
+
+  test('el reset del admin borra los contadores del detector de esa sala', () => {
+    const store = new RedPointStore({ bridge: fakeBridge() })
+    store._ingest(sparkRedPoint(0, 0, 'ECCI-1234'))
+    store.markReset('ECCI-1234')
+    expect(store.detectionStatsFor('ECCI-1234')).toEqual({ total: 0, lastAgoMs: null })
+  })
+
+  // LA regresión: el código de sala se RECICLA (RoomManager.create solo evita los
+  // de las salas vivas). Sin forgetRoom, la sala nueva que caiga en un código
+  // reusado hereda los contadores del detector de la sesión muerta anterior: el
+  // tablero le mostraría al jurado bloqueos que nadie detectó en esta corrida.
+  test('una sala destruida no le hereda sus detecciones a la que recicle su código', () => {
+    const store = new RedPointStore({ bridge: fakeBridge() })
+    store._ingest(sparkRedPoint(0, 0, 'ECCI-1234'))
+    expect(store.detectionStatsFor('ECCI-1234').total).toBe(1)   // la sala vieja detectó
+
+    store.forgetRoom('ECCI-1234')                                 // el barrido la destruyó
+
+    // Misma sala nueva, mismo código: arranca en cero, no hereda nada.
+    expect(store.detectionStatsFor('ECCI-1234')).toEqual({ total: 0, lastAgoMs: null })
+    expect(store.activeZonesFor('ECCI-1234')).toHaveLength(0)
+  })
+
+  test('forgetRoom es por sala: no toca a las demás', () => {
+    const store = new RedPointStore({ bridge: fakeBridge() })
+    store._ingest(sparkRedPoint(0, 0, 'ECCI-1234'))
+    store._ingest(sparkRedPoint(0, 0, 'ECCI-9999'))
+    store.forgetRoom('ECCI-1234')
+    expect(store.detectionStatsFor('ECCI-9999').total).toBe(1)
+    expect(store.activeZonesFor('ECCI-9999')).toContain(zoneIndexAt(0, 0))
+  })
 })
 
 describe('KafkaBridge (topics internos consolidados en sim-events)', () => {
