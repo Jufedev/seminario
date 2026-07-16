@@ -31,6 +31,7 @@ time.tzset()
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from pyspark.sql import SparkSession
+from pyspark.sql import functions as F
 
 from h1_measurement import sweep_latency
 
@@ -58,6 +59,11 @@ def main() -> None:
     ap.add_argument("--room", default=None,
                     help="measure only this room (a mixed archive of several runs pollutes the "
                          "cumulative ground truth; one room = one clean run)")
+    ap.add_argument("--until", default=None, metavar="'YYYY-MM-DD HH:MM:SS'",
+                    help="ignore samples after this event_time (UTC). The detector keeps "
+                         "archiving while it runs, so an archive GROWS past the jam you meant "
+                         "to measure; this bounds a capture after the fact and makes a past "
+                         "result reproducible")
     args = ap.parse_args()
 
     if not Path(args.archive).exists():
@@ -77,6 +83,8 @@ def main() -> None:
     all_rooms = sorted(r["room"] for r in positions.select("room").distinct().collect())
     if args.room:
         positions = positions.filter(positions.room == args.room)
+    if args.until:
+        positions = positions.filter(positions.event_time <= F.lit(args.until).cast("timestamp"))
     n = positions.count()
     if n == 0:
         # Two different failures, two different diagnoses: a room filter that matches
@@ -104,34 +112,70 @@ def main() -> None:
           f"@ ({params['grid_origin_x']},{params['grid_origin_y']})\n")
 
     results = sweep_latency(positions, DEFAULT_WINDOWS, **params)
+    spark.stop()
 
     # Report: the curve. mean_latency_s is the append-equivalent detection latency
     # (window-close), an upper bound on the live update-mode detector.
     header = f"{'window':>10} {'slide':>7} {'mean_latency_s':>15} {'detected':>9} {'false_pos':>10} {'missed':>7}"
     print(header)
     print("-" * len(header))
-    lines = ["window_duration,window_slide,mean_latency_s,detected,false_positives,missed"]
     for r in results:
         ml = "-" if r["mean_latency_s"] is None else f"{r['mean_latency_s']:.1f}"
         nd, nfp, nm = len(r["latencies_s"]), len(r["false_positives"]), len(r["missed"])
         print(f"{r['window_duration']:>10} {r['window_slide']:>7} {ml:>15} {nd:>9} {nfp:>10} {nm:>7}")
+
+    # Refuse to leave a result behind when nothing was measured. The check runs
+    # BEFORE the write on purpose: an exit code is only seen by whoever looks, while
+    # a file on disk outlives the run and gets picked up as a curve by whoever comes
+    # next. A measurement of nothing filed as a result is the worst thing this script
+    # can do, and the project's rule is to fail loudly rather than degrade in silence.
+    #
+    # The two ways of measuring nothing get two diagnoses, because they send you to
+    # opposite places. Onsets exist but every window missed them: that is a REAL H1
+    # finding — the detector cannot see this jam at any window we swept — and telling
+    # the researcher to go capture another run would bury it.
+    if all(r["mean_latency_s"] is None for r in results):
+        any_onsets = any(r["missed"] for r in results)
+        if any_onsets:
+            n = max(len(r["missed"]) for r in results)
+            sys.exit(
+                f"\nMEASURED NOTHING, AND THAT IS A RESULT: the archive holds {n} genuine "
+                "congestion onset(s), and NO swept window detected any of them.\n"
+                "This is not a bad capture — it is H1 failing on this run. Do not re-capture "
+                "to make it go away: widen the sweep, or report it.\n"
+                f"(swept {', '.join(w for w, _ in DEFAULT_WINDOWS)})"
+            )
+        sys.exit(
+            "\nMEASURED NOTHING: the archive holds positions but not a single congestion "
+            "onset — no cell ever crossed the thresholds "
+            f"(avatars>={params['min_avatars']}, dwell>={params['min_dwell_s']}s).\n"
+            "There is nothing here to measure. Capture a run where red zones actually appeared."
+        )
+
+    # Provenance goes IN the file. The archive that produced these numbers is not
+    # versioned (megabytes of Parquet, regenerable), and it GROWS while the detector
+    # keeps running — so a curve read on its own, months later, cannot be tied back to
+    # the capture that produced it, and re-running over a grown archive yields
+    # different numbers that look like the thesis lying. These lines are what makes
+    # the result checkable instead of merely quoted.
+    lines = [
+        f"# archive: {args.archive}",
+        f"# rooms: {','.join(rooms)}",
+        f"# span: {tmin} .. {tmax}",
+        f"# samples: {n}",
+        f"# calibration: avatars>={params['min_avatars']} dwell>={params['min_dwell_s']}s "
+        f"speed<{params['speed_threshold']} cell={params['cell_size_x']}x{params['cell_size_y']}"
+        f"@({params['grid_origin_x']},{params['grid_origin_y']})",
+        "# mean_latency_s is window-close latency: an UPPER BOUND on the live update-mode detector",
+        "window_duration,window_slide,mean_latency_s,detected,false_positives,missed",
+    ]
+    for r in results:
+        ml = "-" if r["mean_latency_s"] is None else f"{r['mean_latency_s']:.1f}"
+        nd, nfp, nm = len(r["latencies_s"]), len(r["false_positives"]), len(r["missed"])
         lines.append(f"{r['window_duration']},{r['window_slide']},{ml},{nd},{nfp},{nm}")
 
     Path(args.csv).write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(f"\nWrote {args.csv}")
-    spark.stop()
-
-    # An archive with no jam in it produces a table of dashes and zeros that looks
-    # exactly like a finished measurement. Say so out loud and exit non-zero: a
-    # curve of nothing quietly filed as a result is the worst outcome this script
-    # has, and the project's rule is to fail loudly rather than degrade in silence.
-    if all(r["mean_latency_s"] is None for r in results):
-        sys.exit(
-            "\nMEASURED NOTHING: no window detected a single congested cell.\n"
-            "The archive holds positions but no jam that crosses the thresholds "
-            f"(avatars>={params['min_avatars']}, dwell>={params['min_dwell_s']}s). "
-            "Capture a run where red zones actually appeared."
-        )
 
 
 if __name__ == "__main__":

@@ -1,3 +1,9 @@
+# archive: /home/jufesena/projects/seminario/archive
+# rooms: ECCI-2572
+# span: 2026-07-16 16:27:25.627000 .. 2026-07-16 16:29:47.651000
+# samples: 19347
+# calibration: avatars>=7 dwell>=5.0s speed<0.5 cell=30.0x30.0@(-240.0,-195.0)
+# mean_latency_s is window-close latency: an UPPER BOUND on the live update-mode detector
 window_duration,window_slide,mean_latency_s,detected,false_positives,missed
 5 seconds,5 seconds,10.2,11,0,24
 10 seconds,5 seconds,2.1,33,0,2
