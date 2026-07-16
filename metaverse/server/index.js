@@ -193,7 +193,8 @@ setInterval(() => {
     analytics.noteSparkRedZones(room.code, sparkRedZones.length)
     if (room.admin) {
       const metrics = analytics.metricsForAdmin(room.code)
-      if (metrics) send(room.admin, { type: 'admin_analytics', ...metrics, sparkRedZones })
+      const detection = redStore.detectionStatsFor(room.code)
+      if (metrics) send(room.admin, { type: 'admin_analytics', ...metrics, sparkRedZones, detection })
     }
   }
 }, ANALYTICS_EMIT_MS)

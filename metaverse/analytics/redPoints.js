@@ -52,6 +52,11 @@ export class RedPointStore {
     // markReset): tras un reset, Spark sigue emitiendo desde su ventana ya
     // abierta (armada con posiciones previas) por ~ventana+watermark.
     this.resetAt = new Map()
+    // Actividad del detector para el tablero: cuántos bloqueos DISTINTOS cazó
+    // Spark en la corrida (celdas únicas, no re-emisiones) y cuándo fue el último.
+    // Es lo que el metaverso NO puede medirse solo: el trabajo del Big Data.
+    this.detectedCells = new Map()   // roomKey → Set<índice de zona detectado>
+    this.lastDetectionAt = new Map() // roomKey → epoch ms de la última detección
     this.mode = 'local'
     this.consumed = 0
   }
@@ -63,6 +68,10 @@ export class RedPointStore {
   markReset(roomCode, resetAt = Date.now()) {
     this.zones.delete(roomCode)
     this.resetAt.set(roomCode, resetAt)
+    // La corrida nueva empieza sin historial de detecciones: el tablero cuenta
+    // lo que Spark caza EN ESTA corrida, no en la anterior.
+    this.detectedCells.delete(roomCode)
+    this.lastDetectionAt.delete(roomCode)
   }
 
   async start() {
@@ -141,6 +150,27 @@ export class RedPointStore {
     let roomZones = this.zones.get(key)
     if (!roomZones) { roomZones = new Map(); this.zones.set(key, roomZones) }
     roomZones.set(zone, Date.now() + TTL_MS)
+    // Registrar la actividad del detector para el tablero (celda distinta + hora).
+    let cells = this.detectedCells.get(key)
+    if (!cells) { cells = new Set(); this.detectedCells.set(key, cells) }
+    cells.add(zone)
+    this.lastDetectionAt.set(key, Date.now())
+  }
+
+  // Actividad del detector Spark para el tablero del admin, POR SALA (suma la
+  // clave global). `total` = bloqueos distintos cazados en la corrida; `lastAgoMs`
+  // = hace cuánto fue la última detección (null si todavía no hubo ninguna).
+  detectionStatsFor(roomCode) {
+    const cells = new Set()
+    let last = 0
+    for (const key of [roomCode, GLOBAL_ROOM_KEY]) {
+      if (key == null) continue
+      const s = this.detectedCells.get(key)
+      if (s) for (const z of s) cells.add(z)
+      const t = this.lastDetectionAt.get(key)
+      if (t && t > last) last = t
+    }
+    return { total: cells.size, lastAgoMs: last ? Date.now() - last : null }
   }
 
   // Poda las zonas expiradas de un mapa de sala y devuelve las vivas en `out`.

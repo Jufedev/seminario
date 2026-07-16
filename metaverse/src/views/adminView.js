@@ -60,15 +60,15 @@ export function renderAdminView(app) {
     <button id="dash-toggle" class="btn secondary dash-fab">📊 Analítica global</button>
     <div id="dash-panel" class="panel dash-panel hidden">
       <div class="dash-head">
-        <h3>📊 Analítica global de la sala <span id="d-mode" style="font-size:10px;color:var(--text-dim)"></span></h3>
+        <h3>📊 Detección del pipeline · Big Data</h3>
         <button id="dash-close" class="btn secondary" style="padding:6px 10px;font-size:12px">✕</button>
       </div>
       <div class="dash-kpis">
+        <div class="kpi-tile"><div class="kpi-val" id="d-red">0</div><div class="kpi-lbl">Zonas rojas (Spark)</div></div>
+        <div class="kpi-tile"><div class="kpi-val" id="d-detected">0</div><div class="kpi-lbl">Bloqueos detectados</div></div>
+        <div class="kpi-tile"><div class="kpi-val" id="d-lastdet">—</div><div class="kpi-lbl">Última detección</div></div>
         <div class="kpi-tile"><div class="kpi-val" id="d-active">0</div><div class="kpi-lbl">Activos</div></div>
         <div class="kpi-tile"><div class="kpi-val" id="d-arrived">0</div><div class="kpi-lbl">Llegados</div></div>
-        <div class="kpi-tile"><div class="kpi-val" id="d-speed">—</div><div class="kpi-lbl">Velocidad m/s</div></div>
-        <div class="kpi-tile"><div class="kpi-val" id="d-c">—</div><div class="kpi-lbl">Congestión C̄</div></div>
-        <div class="kpi-tile"><div class="kpi-val" id="d-red">0</div><div class="kpi-lbl">Zonas rojas</div></div>
         <div class="kpi-tile"><div class="kpi-val" id="d-inc">0</div><div class="kpi-lbl">Incidentes act.</div></div>
       </div>
       <div class="dash-grid" style="grid-template-columns: 1.4fr 1fr">
@@ -82,7 +82,7 @@ export function renderAdminView(app) {
         <div class="dash-card">
           <h4>Mapa de calor de zonas · <span id="d-critical" style="text-transform:none">—</span></h4>
           <canvas id="d-heatmap" class="dash-heatmap"></canvas>
-          <h4 style="margin-top:8px">Velocidad (azul) · zonas rojas (rojo)</h4>
+          <h4 style="margin-top:8px">Zonas rojas detectadas por Spark (en el tiempo)</h4>
           <canvas id="d-spark" style="width:100%;height:56px"></canvas>
         </div>
       </div>
@@ -211,21 +211,23 @@ export function renderAdminView(app) {
       })
       ctx.stroke()
     }
-    line(series.speed, '#3b82f6', 15)
     line(series.red, '#f87171', 6)
   }
 
   function showAnalytics(m) {
-    view.querySelector('#d-mode').textContent = `· fuente: ${m.mode === 'kafka' ? 'Kafka' : 'bus local'}`
-    view.querySelector('#d-active').textContent = m.global.active
-    view.querySelector('#d-arrived').textContent = m.global.arrived
-    view.querySelector('#d-speed').textContent = m.global.avgSpeed ?? '—'
-    view.querySelector('#d-c').textContent = m.global.avgC ?? '—'
     // Zonas rojas del detector Spark (índices de celda activos). El overlay de los
     // jugadores se pinta de esta misma fuente, así que el KPI nunca puede
-    // contradecir lo que se ve en pantalla.
+    // contradecir lo que se ve en pantalla. Es la salida VIVA del pipeline: el
+    // metaverso no la calcula, la recibe.
     const sparkRed = m.sparkRedZones ?? []
     view.querySelector('#d-red').textContent = sparkRed.length
+    // Actividad acumulada del detector en la corrida (redPoints.detectionStatsFor).
+    const det = m.detection ?? { total: 0, lastAgoMs: null }
+    view.querySelector('#d-detected').textContent = det.total
+    view.querySelector('#d-lastdet').textContent =
+      det.lastAgoMs == null ? '—' : `hace ${Math.round(det.lastAgoMs / 1000)}s`
+    view.querySelector('#d-active').textContent = m.global.active
+    view.querySelector('#d-arrived').textContent = m.global.arrived
     view.querySelector('#d-inc').textContent = m.global.incidentsActive
 
     const table = view.querySelector('#d-users')
@@ -247,7 +249,7 @@ export function renderAdminView(app) {
     view.querySelector('#d-rank').textContent =
       '🥇 flota más rápida · 🐌 más congestión sufrida'
     view.querySelector('#d-critical').textContent = m.critical
-      ? `crítica: ${m.critical.label} (C̄ ${m.critical.avgC})` : 'crítica: —'
+      ? `foco: ${m.critical.label}` : 'foco: —'
     // Bordes rojos del heatmap desde las zonas rojas de Spark (no las del ZoneSystem).
     const redFlags = new Array(m.zones.C.length).fill(0)
     for (const z of sparkRed) if (z >= 0 && z < redFlags.length) redFlags[z] = 1
