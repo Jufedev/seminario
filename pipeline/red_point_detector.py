@@ -147,6 +147,12 @@ def detect_red_points(
     cell_size_y=None,
     grid_origin_x=None,
     grid_origin_y=None,
+    window_duration=None,
+    window_slide=None,
+    watermark_delay=None,
+    min_stationary_avatars=None,
+    min_mean_dwell_s=None,
+    speed_threshold=None,
 ):
     """Core detection: stationary avatars grouped by map cell in a sliding window.
 
@@ -161,18 +167,27 @@ def detect_red_points(
     watermark is ignored in batch), which is what makes the logic unit-testable
     without Kafka.
 
-    The grid parameters default to the env-driven module constants; tests pass
-    them explicitly to stay hermetic.
+    Every parameter defaults to the env-driven module constant, so the streaming
+    job (which passes none) is unaffected. Tests pass the grid explicitly to stay
+    hermetic; the H1 measurement passes `window_duration`/`window_slide` to sweep
+    the detection window — the experimental variable — over one archived run
+    without touching the deployed detector.
     """
     csx = CELL_SIZE_X if cell_size_x is None else cell_size_x
     csy = CELL_SIZE_Y if cell_size_y is None else cell_size_y
     ox = GRID_ORIGIN_X if grid_origin_x is None else grid_origin_x
     oy = GRID_ORIGIN_Y if grid_origin_y is None else grid_origin_y
+    wdur = WINDOW_DURATION if window_duration is None else window_duration
+    wslide = WINDOW_SLIDE if window_slide is None else window_slide
+    wmark = WATERMARK_DELAY if watermark_delay is None else watermark_delay
+    min_avatars = MIN_STATIONARY_AVATARS if min_stationary_avatars is None else min_stationary_avatars
+    min_dwell = MIN_MEAN_DWELL_S if min_mean_dwell_s is None else min_mean_dwell_s
+    speed = SPEED_THRESHOLD if speed_threshold is None else speed_threshold
     return (
-        positions.filter(F.col("speed") < SPEED_THRESHOLD)
-        .withWatermark("event_time", WATERMARK_DELAY)
+        positions.filter(F.col("speed") < speed)
+        .withWatermark("event_time", wmark)
         .groupBy(
-            F.window("event_time", WINDOW_DURATION, WINDOW_SLIDE).alias("w"),
+            F.window("event_time", wdur, wslide).alias("w"),
             F.col("room"),
             F.floor((F.col("x") - ox) / csx).alias("cell_x"),
             F.floor((F.col("y") - oy) / csy).alias("cell_y"),
@@ -181,10 +196,10 @@ def detect_red_points(
             F.approx_count_distinct("avatar_id").alias("stationary_avatars"),
             F.count("*").alias("stationary_samples"),
         )
-        .filter(F.col("stationary_avatars") >= MIN_STATIONARY_AVATARS)
+        .filter(F.col("stationary_avatars") >= min_avatars)
         .filter(
             (F.col("stationary_samples") / F.col("stationary_avatars"))
-            >= MIN_MEAN_DWELL_S
+            >= min_dwell
         )
         .withColumn(
             "mean_dwell_s",
