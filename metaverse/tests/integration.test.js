@@ -142,10 +142,12 @@ describe('RedPointStore (red-points de Spark → zonas activas por sala)', () =>
     expect(store.zones.has('ECCI-1234')).toBe(false) // sala sin zonas vivas → se descarta
   })
 
-  // Red-point con window_end explícito (UTC), para probar el filtro post-reset.
-  const sparkRedPointAt = (room, windowEnd) => ({
+  // Red-point con bordes de ventana explícitos (UTC), para probar las barreras.
+  // `windowStart` importa para la barrera de sala muerta (mira el arranque), y por
+  // default queda muy atrás para no interferir con los tests del filtro de reset.
+  const sparkRedPointAt = (room, windowEnd, windowStart = '2026-07-07 12:00:00') => ({
     room, cell_x: 1, cell_y: 1, center_x: 0, center_y: 0,
-    stationary_avatars: 7, window_start: '2026-07-07 12:00:00', window_end: windowEnd,
+    stationary_avatars: 7, window_start: windowStart, window_end: windowEnd,
   })
 
   test('markReset limpia las zonas vivas de la sala (y solo de esa sala)', () => {
@@ -244,17 +246,43 @@ describe('RedPointStore (red-points de Spark → zonas activas por sala)', () =>
     const store = new RedPointStore({ bridge: fakeBridge() })
     const muerte = Date.parse('2026-07-07T12:05:00Z')
     store.forgetRoom('ECCI-1234', muerte)                            // el barrido la destruyó
-    store._ingest(sparkRedPointAt('ECCI-1234', '2026-07-07 12:04:50')) // ventana de la sala MUERTA
+    // Ventana ya CERRADA antes de la muerte: puro dato de la sala muerta.
+    store._ingest(sparkRedPointAt('ECCI-1234', '2026-07-07 12:04:50', '2026-07-07 12:04:40'))
     expect(store.detectionStatsFor('ECCI-1234')).toEqual({ total: 0, lastAgoMs: null })
     expect(store.activeZonesFor('ECCI-1234')).toHaveLength(0)
   })
 
-  test('pero una detección NUEVA (ventana posterior) sí cuenta para la sala reciclada', () => {
+  // EL residuo que la review encontró en el primer arreglo: una ventana que estaba
+  // ABIERTA cuando la sala murió cierra DESPUÉS, así que una barrera que mire el
+  // cierre la deja pasar. Y su contenido es de la sala muerta: la muerta dejó de
+  // producir en el instante de la muerte, y la nueva todavía no existía. Por eso
+  // esta barrera mira el ARRANQUE.
+  test('una ventana abierta al morir la sala tampoco cuenta: trae dato de la muerta', () => {
     const store = new RedPointStore({ bridge: fakeBridge() })
     const muerte = Date.parse('2026-07-07T12:05:00Z')
     store.forgetRoom('ECCI-1234', muerte)
-    store._ingest(sparkRedPointAt('ECCI-1234', '2026-07-07 12:05:30')) // ventana de la sala NUEVA
+    // Arrancó ANTES de la muerte y cerró DESPUÉS: a caballo.
+    store._ingest(sparkRedPointAt('ECCI-1234', '2026-07-07 12:05:05', '2026-07-07 12:04:35'))
+    expect(store.detectionStatsFor('ECCI-1234')).toEqual({ total: 0, lastAgoMs: null })
+    expect(store.activeZonesFor('ECCI-1234')).toHaveLength(0)
+  })
+
+  test('pero una detección NUEVA (ventana arrancada tras la muerte) sí cuenta', () => {
+    const store = new RedPointStore({ bridge: fakeBridge() })
+    const muerte = Date.parse('2026-07-07T12:05:00Z')
+    store.forgetRoom('ECCI-1234', muerte)
+    // Arrancó DESPUÉS de la muerte: solo puede ser de la sala nueva.
+    store._ingest(sparkRedPointAt('ECCI-1234', '2026-07-07 12:05:30', '2026-07-07 12:05:20'))
     expect(store.detectionStatsFor('ECCI-1234').total).toBe(1)
+    expect(store.activeZonesFor('ECCI-1234')).toContain(zoneIndexAt(0, 0))
+  })
+
+  // La barrera de muerte no puede convertirse en una mordaza permanente: si no
+  // parsea el arranque, se deja pasar (mismo fail-open que el filtro de reset).
+  test('window_start ilegible no descarta (fail-open, igual que el filtro de reset)', () => {
+    const store = new RedPointStore({ bridge: fakeBridge() })
+    store.forgetRoom('ECCI-1234', Date.now())
+    store._ingest(sparkRedPointAt('ECCI-1234', '2026-07-07 12:05:30', 'no-es-fecha'))
     expect(store.activeZonesFor('ECCI-1234')).toContain(zoneIndexAt(0, 0))
   })
 })

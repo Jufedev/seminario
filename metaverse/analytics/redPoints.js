@@ -41,6 +41,13 @@ const TTL_MS = 15_000
 // Clave para red-points sin sala atribuible: sus zonas las ven TODAS las salas.
 export const GLOBAL_ROOM_KEY = '__global__'
 
+// Los bordes de ventana de Spark vienen como "2026-07-07 12:00:30" y son UTC: el
+// detector fija spark.sql.session.timeZone=UTC justamente para que no dependan del
+// reloj del host (ver red_point_detector.py). De ahí la 'Z'. Devuelve NaN si no
+// parsea, y los llamadores tratan eso como fail-open: mejor un fantasma raro que
+// perder detecciones.
+const parseWindowTs = v => Date.parse(String(v).replace(' ', 'T') + 'Z')
+
 export class RedPointStore {
   constructor({ bridge } = {}) {
     this.bridge = bridge
@@ -52,6 +59,10 @@ export class RedPointStore {
     // markReset): tras un reset, Spark sigue emitiendo desde su ventana ya
     // abierta (armada con posiciones previas) por ~ventana+watermark.
     this.resetAt = new Map()
+    // Muerte POR SALA: roomCode → epoch ms en que el barrido la destruyó. Es una
+    // barrera hermana de resetAt, pero con la polaridad AL REVÉS (mira window_START,
+    // no window_end). El porqué está en forgetRoom.
+    this.deadAt = new Map()
     // Actividad del detector para el tablero: cuántos bloqueos DISTINTOS cazó
     // Spark en la corrida (celdas únicas, no re-emisiones) y cuándo fue el último.
     // Es lo que el metaverso NO puede medirse solo: el trabajo del Big Data.
@@ -144,8 +155,16 @@ export class RedPointStore {
     // (mejor un fantasma raro que perder detecciones).
     const resetAt = this.resetAt.get(key)
     if (resetAt != null) {
-      const windowEnd = Date.parse(String(e.window_end).replace(' ', 'T') + 'Z')
+      const windowEnd = parseWindowTs(e.window_end)
       if (Number.isFinite(windowEnd) && windowEnd < resetAt) return
+    }
+    // Sala MUERTA cuyo código se recicló: descartar toda ventana que ARRANCÓ antes
+    // de la muerte. Mirar el arranque y no el cierre es lo que distingue esta
+    // barrera de la de reset — ver forgetRoom. Mismo fail-open.
+    const deadAt = this.deadAt.get(key)
+    if (deadAt != null) {
+      const windowStart = parseWindowTs(e.window_start)
+      if (Number.isFinite(windowStart) && windowStart < deadAt) return
     }
     let roomZones = this.zones.get(key)
     if (!roomZones) { roomZones = new Map(); this.zones.set(key, roomZones) }
@@ -170,20 +189,36 @@ export class RedPointStore {
   //
   // La clave GLOBAL no se toca: no es de ninguna sala.
   //
-  // `resetAt` NO se borra: se LEVANTA a ahora. No es estado de la sala muerta, es
-  // una BARRERA temporal, y borrarla la baja. Spark sigue emitiendo red-points de
-  // las ventanas que la sala muerta dejó abiertas por ~ventana+watermark (con los
-  // defaults, ~60s: del mismo orden que EMPTY_ROOM_TTL_MS, así que se solapan de
-  // verdad), y el `room` del red-point es el código PELADO — sin epoch, a
-  // diferencia del avatar_id. Si el código se recicla en esa ventana, esos
-  // rezagados entrarían como detecciones de la sala nueva. Con la barrera en el
-  // instante de la muerte, todo lo que venga de una ventana anterior se descarta:
-  // es exactamente lo que hace markReset, por el mismo motivo.
+  // Además de olvidar, LEVANTA una barrera en `deadAt`, y ahí está la parte sutil.
+  // Spark sigue emitiendo los red-points de las ventanas que la sala muerta dejó
+  // abiertas por ~ventana+watermark (con los defaults, ~60s: del mismo orden que
+  // EMPTY_ROOM_TTL_MS, así que las dos ventanas SE SOLAPAN de verdad), y el `room`
+  // del red-point es el código PELADO, sin epoch — a diferencia del avatar_id. Sin
+  // barrera, esos rezagados entrarían como detecciones de la sala que recicle el
+  // código.
+  //
+  // La barrera mira **window_start**, no window_end, y NO es la misma que la de
+  // markReset. La diferencia es de fondo, no de estilo:
+  //
+  //   · markReset: la sala SIGUE VIVA. Una ventana a caballo del reset trae datos
+  //     de antes Y de después, así que filtrarla por su arranque tiraría una
+  //     detección legítima del run nuevo — y costaría hasta un slide de latencia,
+  //     que es justo lo que la tesis mide. Por eso allá se mira el cierre.
+  //   · forgetRoom: la sala está MUERTA y ya no produce nada. Cualquier ventana que
+  //     arrancó antes de la muerte es dato de la muerta, con a lo sumo unos
+  //     segundos de la sala nueva al final. Descartarla es correcto y no cuesta
+  //     nada: la sala nueva recién arranca y no tiene atascos todavía.
+  //
+  // Mirar el arranque subsume mirar el cierre (toda ventana cerrada antes de la
+  // muerte arrancó antes también), así que `resetAt` de la sala muerta se borra: la
+  // barrera nueva es estrictamente más fuerte, y ese resetAt era estado de una sala
+  // que ya no existe.
   forgetRoom(roomCode, at = Date.now()) {
     this.zones.delete(roomCode)
     this.detectedCells.delete(roomCode)
     this.lastDetectionAt.delete(roomCode)
-    this.resetAt.set(roomCode, at)
+    this.resetAt.delete(roomCode)
+    this.deadAt.set(roomCode, at)
   }
 
   // Actividad del detector Spark para el tablero del admin, POR SALA (suma la
