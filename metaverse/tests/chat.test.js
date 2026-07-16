@@ -7,6 +7,7 @@
 import { describe, expect, test } from 'bun:test'
 import { Room } from '../server/rooms.js'
 import { buildChatMessage, sanitizeChatText, ChatRateLimiter, MAX_CHAT_LEN } from '../server/chat.js'
+import { MinIntervalLimiter } from '../server/rateLimit.js'
 import { wrapLines, staleChatSlots } from '../src/views/chatBubbles.js'
 import { chatOpacity, chatExpired, CHAT_DWELL_MS, CHAT_FADE_MS } from '../src/views/chatTiming.js'
 
@@ -220,5 +221,37 @@ describe('higiene de inundación', () => {
     for (let i = 0; i < 5; i++) rl.allow(1000)
     expect(rl.allow(1000)).toBe(false)
     expect(rl.allow(1000 + 5001)).toBe(true)
+  })
+})
+
+// El OTRO limitador del servidor, el del volante. No cuenta mensajes en una
+// ventana como el del chat: pone un PISO entre mensajes consecutivos, porque una
+// intención de giro es un evento discreto por cruce (~1 cada 8 s) y lo único que
+// hay que impedir es que un cliente roto convierta el canal en un flujo continuo.
+describe('piso entre mensajes del volante (MinIntervalLimiter)', () => {
+  test('el primero siempre pasa, por temprano que sea', () => {
+    const rl = new MinIntervalLimiter(200)
+    expect(rl.allow(0)).toBe(true)   // arranca en -Infinity: nada quedó "antes"
+  })
+
+  test('corta el que llega antes del piso y admite el que lo respeta', () => {
+    const rl = new MinIntervalLimiter(200)
+    expect(rl.allow(1000)).toBe(true)
+    expect(rl.allow(1199)).toBe(false)  // 199 ms: por debajo del piso
+    expect(rl.allow(1200)).toBe(true)   // 200 ms exactos: el piso se cumple
+  })
+
+  // La parte que un piso mal hecho arruina: un rechazo NO puede correr el reloj,
+  // o un cliente que martilla se auto-bloquea para siempre y nunca vuelve a pasar.
+  test('un mensaje rechazado no mueve el piso: la ráfaga no se auto-castiga', () => {
+    const rl = new MinIntervalLimiter(200)
+    expect(rl.allow(1000)).toBe(true)
+    for (const t of [1050, 1100, 1150]) expect(rl.allow(t)).toBe(false)
+    expect(rl.allow(1200)).toBe(true)   // 200 ms desde el ACEPTADO, no desde el último intento
+  })
+
+  test('a ritmo respetuoso pasan todos', () => {
+    const rl = new MinIntervalLimiter(200)
+    expect([1000, 1200, 1400, 1600].map(t => rl.allow(t))).toEqual([true, true, true, true])
   })
 })
