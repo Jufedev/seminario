@@ -3,6 +3,7 @@ import { session } from '../net/session.js'
 import { createOnlineWorld, OWNER_COLORS } from './onlineWorld.js'
 import { buildOptions } from './config.js'
 import { CHAT_PANEL_HTML, wireChatPanel } from './chatPanel.js'
+import { DRIVE_PANEL_HTML, wireDrivePanel } from './drivePanel.js'
 import { wireCopyButton } from '../ui/clipboard.js'
 import { wireCollapseToggle } from '../ui/collapse.js'
 import { memberRow } from '../ui/memberRow.js'
@@ -59,7 +60,10 @@ export function renderUserView(app) {
       </div>
       <button class="btn secondary" id="btn-leave">← Salir de la sala</button>
     </div>
-    <div id="dc-note" class="dc-note hidden"></div>
+    <div class="map-bottom-dock">
+      <div id="dc-note" class="dc-note hidden"></div>
+      ${DRIVE_PANEL_HTML}
+    </div>
     ${CHAT_PANEL_HTML}
   `
   app.appendChild(view)
@@ -143,6 +147,10 @@ export function renderUserView(app) {
     noteTimer = setTimeout(() => note.classList.add('hidden'), 3500)
   }
 
+  // ── Volante del vehículo personal: aparece solo mientras rueda ──
+  // Reusa el aviso efímero de arriba: es el canal de respuesta del volante.
+  const drive = wireDrivePanel(view, world, showNote)
+
   // ── Estado que llega del servidor ──
   function showSimInfo(m) {
     world.applySimInfo(m)
@@ -160,6 +168,9 @@ export function renderUserView(app) {
     // fleets[].personal.invoked), que el reset del admin vuelve a false.
     // Ver invokeLocks.js.
     btnFleet.disabled = fleetButtonDisabled(mine)
+    // El volante lo abre y lo cierra el servidor (personal.active), igual que los
+    // bloqueos: así sobrevive a recargas y no queda abierto tras un reset.
+    drive.applyFleet(mine)
     const puntosFijos = routeSelectsDisabled(mine)
     selOrigin.disabled = puntosFijos
     selDest.disabled = puntosFijos
@@ -188,6 +199,7 @@ export function renderUserView(app) {
 
   window.__teardownView = () => {
     subs.forEach(off => off())
+    drive.dispose()
     clearTimeout(noteTimer)
     world.dispose()
   }
