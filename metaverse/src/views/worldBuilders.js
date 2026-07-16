@@ -151,8 +151,60 @@ export function buildOriginDestMarkers(scene, originId, destId) {
   })
 }
 
+// ── Ruta PUNTEADA sobre nodos ya resueltos (la "ruta viva" del vehículo personal) ──
+// A diferencia de buildRoute, NO calcula nada: recibe la ruta del SERVIDOR, que es el
+// único que tiene el grafo con las zonas rojas de Spark penalizadas y los tramos
+// bloqueados por incidentes. Calcularla acá daría la ruta ideal otra vez — que es,
+// justamente, la que ya dibuja buildRoute en sólido.
+//
+// Se dibuja con quads y no con LineDashedMaterial porque una línea de 1 px se pierde
+// desde la cámara conductor, que es exactamente desde donde hay que verla.
+// Devuelve un Mesh (o null si la ruta no da para dibujar); el llamador lo agrega a la
+// escena y se encarga de liberarlo.
+const DASH_LEN = 6, DASH_GAP = 4, DASH_W = 1.1
+// y: por encima de la ruta sólida (0.15) y por debajo de las zonas rojas (0.5), que
+// son translúcidas: la punteada se ve a través de la zona en vez de taparla.
+const DASH_Y = 0.28
+
+export function buildDashedRoute(nodes, color = 0x22d3ee) {
+  if (!nodes || nodes.length < 2) return null
+  const geoms = []
+  // El patrón dash/gap se arrastra de un tramo al siguiente: sin esto cada cruce
+  // reiniciaría el punteado y la ruta se vería con los guiones amontonados en las
+  // esquinas.
+  let carry = 0
+  for (let i = 0; i < nodes.length - 1; i++) {
+    const a = NODES[nodes[i]], b = NODES[nodes[i + 1]]
+    if (!a || !b) continue
+    const dx = b.x - a.x, dz = b.z - a.z, len = Math.hypot(dx, dz)
+    if (!len) continue
+    const ux = dx / len, uz = dz / len
+    const angle = -Math.atan2(dx, dz)
+    let s = carry
+    while (s < len) {
+      const e = Math.min(s + DASH_LEN, len)
+      if (e - s > 0.5) {   // un guion más corto que esto es basura visual
+        const geo = new THREE.PlaneGeometry(DASH_W, e - s)
+        geo.rotateX(-Math.PI / 2)
+        geo.rotateY(angle)
+        geo.translate(a.x + ux * (s + e) / 2, DASH_Y, a.z + uz * (s + e) / 2)
+        geoms.push(geo)
+      }
+      s = e + DASH_GAP
+    }
+    carry = Math.max(0, s - len)
+  }
+  if (!geoms.length) return null
+  return new THREE.Mesh(
+    mergeGeometries(geoms, false),
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.95 }),
+  )
+}
+
 // ── Calcula y dibuja la ruta Dijkstra entre el origen y el destino elegidos.
-//    `color` opcional: en modo online cada flota se pinta del color de su dueño. ──
+//    `color` opcional: en modo online cada flota se pinta del color de su dueño.
+//    Corre sobre el grafo LIMPIO (dijkstra sin state): es la ruta ideal, la más
+//    rápida COMO SI no hubiera eventos. La contraparte viva es buildDashedRoute. ──
 export function buildRoute(scene, originPid, destPid, color = 0x60a5fa) {
   const startId = pointNode(originPid)
   const goalId = pointNode(destPid)

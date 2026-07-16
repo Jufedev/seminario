@@ -6,7 +6,7 @@ import { AGENT_STATE } from '../sim/agents.js'
 import { SIM_CONFIG } from '../sim/config.js'
 import { INCIDENT_TYPES, createIncidentMarker } from '../sim/incidents.js'
 import { ANALYTICS_CONFIG } from '../analytics/config.js'
-import { buildRoads, buildStreetLabels, buildOriginDestMarkers, buildRoute } from './worldBuilders.js'
+import { buildRoads, buildStreetLabels, buildOriginDestMarkers, buildRoute, buildDashedRoute } from './worldBuilders.js'
 import { createChatBubbles } from './chatBubbles.js'
 import { SnapshotInterpolator } from '../net/interpolation.js'
 
@@ -66,6 +66,9 @@ export function createOnlineWorld(canvas, { initialMode = '2d', onHud = null, hi
   const traffic = new TrafficSystem(scene)    // la fase la dicta el servidor (setPhaseIndex)
   let runGroup = new THREE.Group()            // rutas óptimas por flota (se rehace con cada sim_info)
   scene.add(runGroup)
+  // Ruta VIVA del vehículo personal (punteada, cian): la manda el servidor en cada
+  // drive_state, ya resuelta sobre el grafo con las zonas rojas penalizadas.
+  let suggestMesh = null
 
   // ── Avatares remotos: InstancedMesh alimentado por el interpolador ──
   const agentMesh = new THREE.InstancedMesh(
@@ -236,6 +239,19 @@ export function createOnlineWorld(canvas, { initialMode = '2d', onHud = null, hi
       scene.add(runGroup)
     },
 
+    // drive_state → la ruta VIVA del vehículo personal, punteada. Llega ya resuelta
+    // desde el servidor (el único con el grafo penalizado por las zonas rojas), y
+    // cambia sola cuando Spark pinta una zona: ahí se separa de la sólida, que es la
+    // ruta ideal sin eventos. `null` la borra (el vehículo dejó la vía).
+    showSuggestedRoute(nodes) {
+      if (suggestMesh) {
+        suggestMesh.geometry.dispose(); suggestMesh.material.dispose(); suggestMesh.removeFromParent()
+        suggestMesh = null
+      }
+      suggestMesh = buildDashedRoute(nodes)
+      if (suggestMesh) scene.add(suggestMesh)
+    },
+
     // chat_message → burbuja sobre el avatar del emisor. Solo los usuarios
     // (slot 1..3) tienen avatar; el admin no habla por aquí, su mensaje lo
     // anuncia el borde de la ventana (chatBanner.js).
@@ -261,6 +277,7 @@ export function createOnlineWorld(canvas, { initialMode = '2d', onHud = null, hi
       controls.dispose()
       traffic.dispose()
       bubbles.dispose()
+      if (suggestMesh) { suggestMesh.geometry.dispose(); suggestMesh.material.dispose(); suggestMesh.removeFromParent() }
       syncIncidents([])   // limpia todos los marcadores de incidente
       zonePlanes.forEach(p => { p.geometry.dispose(); p.material.dispose(); p.removeFromParent() })
       agentMesh.geometry.dispose(); agentMesh.material.dispose(); agentMesh.removeFromParent()
