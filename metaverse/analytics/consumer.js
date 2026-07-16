@@ -36,13 +36,17 @@ function newRoomState() {
   return {
     users: new Map(),                        // slot → newUser()
     incidentsByType: {}, incidentsActive: new Set(), incidentsTotal: 0,
-    global: { active: 0, stuck: 0, avgSpeed: 0, avgC: 0, redZones: 0, arrived: 0 },
+    // Sin avgC ni avgSpeed: el dashboard dejó de mostrarlos a propósito. C̄ es el
+    // índice de congestión que el metaverso se calcula A SÍ MISMO, y publicarlo al
+    // lado de la detección de Spark invitaba justo a la lectura que la tesis niega
+    // (el sistema evaluándose con su propia opinión en vez de con el pipeline).
+    global: { active: 0, stuck: 0, redZones: 0, arrived: 0 },
     zonesC: new Array(nZones).fill(0),       // último C por zona (heatmap)
     zonesRed: new Array(nZones).fill(0),
     zonesCSum: new Float64Array(nZones),     // acumulado de sesión → zona crítica
     zonesSamples: 0,
     window: { arrivals: 0, decisions: 0, incidents: 0 },   // contadores de la ventana actual
-    series: { t: [], speed: [], red: [], incidents: [], arrivals: [] },
+    series: { t: [], red: [], incidents: [], arrivals: [] },
     startedAt: Date.now(),
   }
 }
@@ -174,7 +178,6 @@ export class AnalyticsConsumer {
         break
       }
       case 'agent.position':
-        st.global.avgSpeed = e.avg_speed_mps
         st.global.stuck = e.stuck
         st.global.active = e.moving + e.waiting + e.stuck
         st.global.arrived = e.arrived
@@ -197,11 +200,12 @@ export class AnalyticsConsumer {
         st.incidentsActive.delete(e.incident_id)
         break
       case 'analytics.snapshot':
-        // avg_C y zones_C vienen del ZoneSystem en modo solo-métricas. El conteo
-        // de zonas rojas NO se toma de aquí: la fuente de verdad es el detector
-        // Spark y llega por noteSparkRedZones() (red_zones del snapshot es la
-        // opinión informativa del índice C interno, no la detección de registro).
-        st.global.avgC = e.avg_C
+        // De este evento se toma SOLO zones_C (ZoneSystem en modo solo-métricas), y
+        // solo como gradiente del heatmap. Ni avg_C ni red_zones se guardan: son la
+        // opinión que el metaverso tiene de su propia congestión, y la fuente de
+        // verdad de la detección es el detector Spark, que llega por
+        // noteSparkRedZones(). Que este evento no pueda pisar ese conteo es la
+        // invariante que sostiene la tesis, no un detalle de implementación.
         if (e.zones_C) {
           st.zonesC = e.zones_C
           st.zonesRed = e.zones_red
@@ -229,7 +233,6 @@ export class AnalyticsConsumer {
     for (const st of this.rooms.values()) {
       const s = st.series
       s.t.push(Math.round((Date.now() - st.startedAt) / 1000))
-      s.speed.push(r1(st.global.avgSpeed))
       s.red.push(st.global.redZones)
       s.incidents.push(st.incidentsActive.size)
       s.arrivals.push(st.window.arrivals)
@@ -286,7 +289,10 @@ export class AnalyticsConsumer {
     const fastestFleet = withArrivals.reduce((b, p) => (!b || p.fleet.avgTravel_s < b.fleet.avgTravel_s ? p : b), null)
     const slowestFleet = withArrivals.reduce((b, p) => (!b || p.fleet.avgTravel_s > b.fleet.avgTravel_s ? p : b), null)
 
-    // Zona más crítica de la sesión (C̄ acumulado) → cruce aproximado por nombres reales
+    // Zona más crítica de la sesión → cruce aproximado por nombres reales. C̄ acumulado
+    // ORDENA (para elegir un foco hay que comparar zonas con algo), pero no se publica:
+    // adentro es una heurística para poner una etiqueta, y afuera sería otra vez el
+    // metaverso midiéndose a sí mismo al lado de la detección de Spark.
     let critical = null
     if (st.zonesSamples > 0) {
       let best = 0
@@ -296,13 +302,13 @@ export class AnalyticsConsumer {
       const cz = CFG.ZONE_ORIGIN_Z + (zz + 0.5) * CFG.ZONE_CELL
       const cra = CARRERAS.reduce((b, c) => Math.abs(c.x - cx) < Math.abs(b.x - cx) ? c : b)
       const cl = CALLES.reduce((b, c) => Math.abs(c.z - cz) < Math.abs(b.z - cz) ? c : b)
-      critical = { zone: best, zx, zz, avgC: r2(st.zonesCSum[best] / st.zonesSamples), label: `${cra.name} × ${cl.name}` }
+      critical = { zone: best, zx, zz, label: `${cra.name} × ${cl.name}` }
     }
 
     return {
       global: {
         active: st.global.active, arrived: st.global.arrived, stuck: st.global.stuck,
-        avgSpeed: r1(st.global.avgSpeed), avgC: r2(st.global.avgC), redZones: st.global.redZones,
+        redZones: st.global.redZones,
         incidentsActive: st.incidentsActive.size, incidentsTotal: st.incidentsTotal,
         incidentsByType: { ...st.incidentsByType },
       },

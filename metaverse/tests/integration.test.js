@@ -472,7 +472,10 @@ describe('AnalyticsConsumer (zonas rojas del dashboard = detector Spark, no el �
     expect(c.metricsForAdmin('ECCI-9999').global.arrived).toBe(4)
   })
 
-  test('analytics.snapshot alimenta C̄ y el heatmap pero NO pisa el conteo de Spark', () => {
+  // La opinión que el metaverso tiene de su propia congestión (avg_C, red_zones)
+  // entra por este evento, y no puede salir por ningún lado que se lea como
+  // detección: de ahí sale SOLO el gradiente del heatmap.
+  test('analytics.snapshot alimenta el heatmap pero NO pisa el conteo de Spark', () => {
     const c = consumer()
     c.noteSparkRedZones('ECCI-1234', 2)
     c._ingest('analytics.snapshot', {
@@ -480,9 +483,9 @@ describe('AnalyticsConsumer (zonas rojas del dashboard = detector Spark, no el �
       zones_C: [0.1, 0.9], zones_red: [0, 1],
     })
     const m = c.metricsForAdmin('ECCI-1234')
-    expect(m.global.avgC).toBe(0.42)                  // C̄ vuelve a estar vivo
     expect(m.zones.C).toEqual([0.1, 0.9])             // gradiente del heatmap vivo
     expect(m.global.redZones).toBe(2)                 // Spark manda, no red_zones interno
+    expect(m.global.avgC).toBeUndefined()             // C̄ no se publica: contradecía la tesis
   })
 
   test('la serie roja del sparkline sale del conteo Spark', () => {
