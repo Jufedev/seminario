@@ -169,11 +169,21 @@ export class RedPointStore {
   // corrida, no estado vivo, y por eso no vencen solos.
   //
   // La clave GLOBAL no se toca: no es de ninguna sala.
-  forgetRoom(roomCode) {
+  //
+  // `resetAt` NO se borra: se LEVANTA a ahora. No es estado de la sala muerta, es
+  // una BARRERA temporal, y borrarla la baja. Spark sigue emitiendo red-points de
+  // las ventanas que la sala muerta dejó abiertas por ~ventana+watermark (con los
+  // defaults, ~60s: del mismo orden que EMPTY_ROOM_TTL_MS, así que se solapan de
+  // verdad), y el `room` del red-point es el código PELADO — sin epoch, a
+  // diferencia del avatar_id. Si el código se recicla en esa ventana, esos
+  // rezagados entrarían como detecciones de la sala nueva. Con la barrera en el
+  // instante de la muerte, todo lo que venga de una ventana anterior se descarta:
+  // es exactamente lo que hace markReset, por el mismo motivo.
+  forgetRoom(roomCode, at = Date.now()) {
     this.zones.delete(roomCode)
-    this.resetAt.delete(roomCode)
     this.detectedCells.delete(roomCode)
     this.lastDetectionAt.delete(roomCode)
+    this.resetAt.set(roomCode, at)
   }
 
   // Actividad del detector Spark para el tablero del admin, POR SALA (suma la

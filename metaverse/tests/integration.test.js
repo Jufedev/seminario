@@ -233,6 +233,30 @@ describe('RedPointStore (red-points de Spark → zonas activas por sala)', () =>
     expect(store.detectionStatsFor('ECCI-9999').total).toBe(1)
     expect(store.activeZonesFor('ECCI-9999')).toContain(zoneIndexAt(0, 0))
   })
+
+  // Olvidar la sala no alcanza: Spark sigue emitiendo las ventanas que la sala
+  // muerta dejó abiertas (~ventana+watermark ≈ 60s con los defaults, del mismo
+  // orden que el TTL de sala vacía) y el red-point trae el código PELADO, sin
+  // epoch. Si el código se recicló, esos rezagados entrarían como detecciones de
+  // la sala nueva. Por eso forgetRoom LEVANTA la barrera resetAt en vez de
+  // borrarla: no es estado de la muerta, es un corte temporal.
+  test('un red-point rezagado de la sala muerta no cuenta para la que recicló su código', () => {
+    const store = new RedPointStore({ bridge: fakeBridge() })
+    const muerte = Date.parse('2026-07-07T12:05:00Z')
+    store.forgetRoom('ECCI-1234', muerte)                            // el barrido la destruyó
+    store._ingest(sparkRedPointAt('ECCI-1234', '2026-07-07 12:04:50')) // ventana de la sala MUERTA
+    expect(store.detectionStatsFor('ECCI-1234')).toEqual({ total: 0, lastAgoMs: null })
+    expect(store.activeZonesFor('ECCI-1234')).toHaveLength(0)
+  })
+
+  test('pero una detección NUEVA (ventana posterior) sí cuenta para la sala reciclada', () => {
+    const store = new RedPointStore({ bridge: fakeBridge() })
+    const muerte = Date.parse('2026-07-07T12:05:00Z')
+    store.forgetRoom('ECCI-1234', muerte)
+    store._ingest(sparkRedPointAt('ECCI-1234', '2026-07-07 12:05:30')) // ventana de la sala NUEVA
+    expect(store.detectionStatsFor('ECCI-1234').total).toBe(1)
+    expect(store.activeZonesFor('ECCI-1234')).toContain(zoneIndexAt(0, 0))
+  })
 })
 
 describe('KafkaBridge (topics internos consolidados en sim-events)', () => {
