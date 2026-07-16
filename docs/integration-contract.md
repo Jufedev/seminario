@@ -17,9 +17,10 @@ El **Big Data es el detector de récord**. El metaverso es la FUENTE de datos
 (la simulación) y el renderizador; NO detecta los puntos rojos. La detección de
 congestión que el metaverso trae internamente (`src/analytics/zones.js`) está
 **desconectada a propósito**: corre en modo `metricsOnly` —calcula un índice de
-congestión para el panel del admin— y **no** alimenta el overlay ni el recálculo de
+congestión que hoy **no lee nadie**— y **no** alimenta el overlay ni el recálculo de
 rutas. Las zonas rojas que ve el usuario y que disparan el rerouteo provienen
-exclusivamente del topic `red-points` que emite Spark.
+exclusivamente del topic `red-points` que emite Spark, y el panel del admin reporta
+esas detecciones de Spark, no el índice interno.
 
 No hay bridge: el servidor Node ya habla el protocolo Kafka de forma nativa
 (kafkajs), así que produce y consume directamente contra el mismo broker que el

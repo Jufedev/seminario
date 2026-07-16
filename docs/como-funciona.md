@@ -475,8 +475,12 @@ emitiendo o no.
 ## 9. Lo que el sistema NO hace (honestidad intelectual)
 
 - **El metaverso no detecta.** Su detección interna existe en el código pero corre en
-  modo `metricsOnly`: calcula un índice de congestión para el dashboard y **nada más**.
-  No pinta zonas, no penaliza rutas, no rerutea. Está desconectada a propósito.
+  modo `metricsOnly`: calcula un índice de congestión y **nada más**. No pinta zonas,
+  no penaliza rutas, no rerutea. Está desconectada a propósito. Y desde el rediseño del
+  tablero **ya ni siquiera se muestra**: mientras el índice tuvo una casilla, la pantalla
+  decía en voz baja que el metaverso sabe medir su propia congestión — justo lo contrario
+  de la tesis. Hoy el tablero reporta lo que hizo Spark. El índice se sigue calculando y
+  no lo lee nadie: es deuda, y está anotada como tal.
 - **No hay evento de "bloqueo resuelto".** Las zonas se apagan por TTL (§3.5).
 - **`approx_count_distinct` es aproximado** (HyperLogLog, ~2% de error). Es una decisión
   consciente: precisión vs latencia. Para una decisión de umbral, alcanza — y es
@@ -489,3 +493,103 @@ emitiendo o no.
 - **El detector no escala.** Corre en **una sola** réplica, y es a propósito: la consulta
   tiene estado (las ventanas) y una segunda réplica sería un segundo detector emitiendo los
   mismos puntos rojos. Para el volumen del proyecto (§7.1), una alcanza y sobra.
+
+---
+
+## 10. Cómo se mide H1
+
+Todo lo anterior describe un sistema que **detecta**. Esta sección es la que dice **con
+cuánta oportunidad** — que es la hipótesis, y es lo único que se puede refutar.
+
+### 10.1 La latencia de detección: qué se mide y qué NO
+
+```
+incidente ──► se forma la cola ──► la condición se cumple ──► el detector emite
+    │          (tiempo FÍSICO)              │                       │
+    └── NO es H1 ──────────────────────────►│                       │
+                                            │◄── LATENCIA DE ───────┤
+                                            │    DETECCIÓN          │
+```
+
+La latencia de detección es `t_emisión − t_condición`, donde `t_condición` es el primer
+instante en que una celda cumple los dos umbrales (§3.4).
+
+**Lo que queda deliberadamente afuera es el tiempo físico** que tarda la cola en formarse
+después del incidente. Ese intervalo lo decide la física del simulador —la velocidad de los
+autos, la densidad del tránsito—, no la arquitectura de datos. Meterlo adentro sería medir
+el simulador y presentar el número como si midiera la hipótesis. Es la decisión metodológica
+más importante de la medición.
+
+Y se parte en dos, que también vale distinguir:
+
+| Componente | Fórmula | Lo determina |
+|---|---|---|
+| **Latencia algorítmica** | `window_end − t_condición` | La ventana. Es un **piso matemático**: no se puede detectar más rápido que el paso de la ventana. No es una deficiencia. |
+| **Latencia de procesamiento** | `t_emisión − window_end` | El micro-batch de Spark, Kafka, la red. |
+
+### 10.2 El truco: `t_condición` no se conoce en vivo
+
+En el instante en que la congestión empieza a existir, **nadie lo sabe todavía** — es
+justamente lo que el detector está tratando de descubrir. Así que no se observa: se calcula
+**después**, reproduciendo (*replay*) las posiciones crudas archivadas y preguntando, de
+forma acumulada y sin ventana, cuándo la celda cumplió por primera vez la condición del
+propio detector.
+
+Eso convierte a `t_condición` en una **verdad de referencia calculada**, no estimada. Y ahí
+es donde el **lago de datos deja de ser decorativo**: el detector archiva las posiciones a
+Parquet (§9, `ARCHIVE_PATH`), y sobre ese archivo corre un proceso **batch** que mide al
+proceso de **streaming**. Escritura en vivo, lectura por lotes — los dos caminos sobre los
+mismos datos.
+
+> El replay usa **la misma** `detect_red_points()` que corre en streaming, no una
+> reimplementación. Si fuera otra función, estaríamos midiendo otro detector.
+
+### 10.3 Una sola corrida da toda la curva
+
+Como el barrido es offline, **una corrida archivada produce todos los puntos**: se re-corre
+la detección con cada duración de ventana sobre exactamente los mismos datos. Eso elimina la
+variabilidad entre corridas como factor de confusión — no es que las configuraciones se
+parezcan, es que ven los **mismos bytes**.
+
+```bash
+set -a; . ./.env; set +a          # ARCHIVE_PATH prendido → el detector archiva
+make dev                          # generar UN atasco real (ver §8)
+.venv/bin/python pipeline/run_h1_measurement.py --csv h1_latency_clean.csv
+```
+
+### 10.4 El resultado
+
+| Ventana | Latencia media | Detectadas | Falsos + | Perdidas |
+|---|---|---|---|---|
+| 5 s | 10.2 s | 11/35 | 0 | 24 |
+| **10 s** (la calibrada) | **2.1 s** | **33/35** | **0** | **2** |
+| 15 s | 1.4 s | 34/35 | 0 | 1 |
+| 20 s | 1.5 s | 34/35 | 0 | 1 |
+| 30 s | 0.4 s | 34/35 | 1 | 1 |
+
+**H1 se sostiene**: a la ventana con la que el proyecto ya corría, un bloqueo se marca ~2.1 s
+después de formarse, con cobertura del 94% y cero falsos positivos.
+
+Y la curva enseña dos cosas que no eran obvias:
+
+- **La ventana de 5 s no es "la más rápida", es la peor.** Al ser igual al umbral de
+  permanencia, exige que la celda esté llena los 5 s enteros: pierde 24 de 35 y las que
+  encuentra las encuentra tarde. La intuición de "más corta = más rápida" es falsa acá.
+- **Los 10 s caen en el codo**, así que la calibración que ya existía queda **validada**, no
+  asumida. A los 30 s empiezan los falsos positivos.
+
+### 10.5 Dos honestidades
+
+**El número es una cota superior.** El replay en batch mide la latencia de *cierre de
+ventana*; el detector en vivo emite en modo `update` apenas cruza el umbral (§2.8), o sea
+**puede ser más rápido**. Se reporta el número conservador.
+
+**La medición exige una corrida CORTA y controlada.** Un primer intento sobre ~30 min de dos
+salas dio 196 celdas con "congestión" — medio mapa. La verdad de referencia acumulada se
+ensucia sobre spans largos: una celda donde siete autos pararon en **momentos distintos** a lo
+largo de media hora no fue nunca un atasco. Una corrida de ~2 min con un bloqueo real da 35.
+Eso no es un tropiezo del método: **es el método**.
+
+> La corrida archivada **no se versiona** (son megabytes de Parquet, y se regenera). Lo que
+> se versiona es el resultado: `h1_latency_clean.csv`. La procedencia de esos números —qué
+> captura los produjo— vive en el mensaje del commit que los agregó.

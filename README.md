@@ -9,6 +9,25 @@ y recalcula rutas antes de que la mayoría de los usuarios queden atrapados.
 oportunidad suficiente para rerutear. El Big Data es el **detector de récord**;
 el metaverso es la fuente de datos y el renderizador.
 
+**H1 está MEDIDA, no argumentada.** Con la ventana calibrada de 10 s, el detector
+marca un bloqueo **≈2.1 s después de que la congestión se forma**, encontrando 33 de
+35 celdas congestionadas y **sin un solo falso positivo**. Dos segundos son margen de
+sobra para rerutear a quien todavía viene en camino. El barrido además **valida la
+calibración**: los 10 s no eran un número elegido a dedo, caen en el codo de la curva.
+
+| Ventana | Latencia | Detectadas | Falsos + | Perdidas |
+|---|---|---|---|---|
+| 5 s | 10.2 s | 11/35 | 0 | 24 |
+| **10 s** (calibrada) | **2.1 s** | **33/35** | **0** | **2** |
+| 15 s | 1.4 s | 34/35 | 0 | 1 |
+| 20 s | 1.5 s | 34/35 | 0 | 1 |
+| 30 s | 0.4 s | 34/35 | 1 | 1 |
+
+Los números salen de [`h1_latency_clean.csv`](h1_latency_clean.csv) y se reproducen con
+`pipeline/run_h1_measurement.py` sobre una corrida archivada. Cómo se miden —y por qué la
+latencia excluye a propósito el tiempo que tarda la cola en formarse— en
+[`docs/como-funciona.md` §10](docs/como-funciona.md#10-cómo-se-mide-h1).
+
 ## Arquitectura
 
 ```
@@ -37,11 +56,14 @@ metaverse/        Metaverso Three.js — fuente de datos + render (corre con bun
   src/            Cliente del navegador (render, red, vistas) — solo modo online
 pipeline/         Big Data — el detector Spark (red_point_detector.py)
   Dockerfile      La imagen con la que el MISMO detector corre en Azure
+  h1_measurement.py      La MEDICIÓN de H1: verdad de referencia + barrido de ventanas
+  run_h1_measurement.py  Corre el barrido sobre una corrida archivada → la curva
 env/              Perfiles de entorno: env.dev.example · env.prod.example
 infra/            Terraform (Azure: Event Hubs + Container Apps + ADLS + VM) — entorno productivo
 scripts/          kafka-local.sh (Kafka nativo) · dev-up.sh (loop local) · deploy-azure.sh (Azure)
-tests/            Tests de la lógica de detección y del parseo de posiciones
+tests/            Tests de la lógica de detección, del parseo de posiciones y de la medición de H1
 docs/             Cómo funciona, contrato de integración, costos, diagramas
+h1_latency_clean.csv   El resultado medido de H1 (la corrida archivada NO se versiona: ver §10)
 ```
 
 En Azure el detector corre como **contenedor** (Azure Container Apps), no en un cluster: el
