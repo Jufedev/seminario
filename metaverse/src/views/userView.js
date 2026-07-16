@@ -4,6 +4,7 @@ import { createOnlineWorld, OWNER_COLORS } from './onlineWorld.js'
 import { buildOptions } from './config.js'
 import { CHAT_PANEL_HTML, wireChatPanel } from './chatPanel.js'
 import { DRIVE_PANEL_HTML, wireDrivePanel } from './drivePanel.js'
+import { CAM_PANEL_HTML, wireCamPanel } from './camPanel.js'
 import { wireCopyButton } from '../ui/clipboard.js'
 import { wireCollapseToggle } from '../ui/collapse.js'
 import { memberRow } from '../ui/memberRow.js'
@@ -12,10 +13,13 @@ import {
 } from './invokeLocks.js'
 
 // ════════════════════════════════════════════════════════════════
-//  VISTA USUARIO (M3) — SOLO 2D cenital. El usuario controla SU flota:
-//  origen/destino (15 puntos), cantidad, oleadas, e "Invocar vehículos".
-//  Sus vehículos se resaltan (más grandes y a todo color); las flotas
-//  de los demás se ven atenuadas. Los incidentes los pone el admin.
+//  VISTA USUARIO (M3) — El usuario controla SU flota: origen/destino
+//  (15 puntos), cantidad, oleadas, e "Invocar vehículos". Sus vehículos
+//  se resaltan (más grandes y a todo color); las flotas de los demás se
+//  ven atenuadas. Los incidentes los pone el admin.
+//  Tres vistas (camPanel.js): cenital, órbita libre y conductor —esta
+//  última pegada a su vehículo personal—. Arranca en cenital, que es
+//  donde mejor se leen las zonas rojas.
 // ════════════════════════════════════════════════════════════════
 export function renderUserView(app) {
   // Sin sala activa (URL directa o sesión caída) → al lobby
@@ -58,7 +62,10 @@ export function renderUserView(app) {
           <button class="btn secondary" id="btn-fleet" disabled style="margin-top:6px">🚚 Invocar flota</button>
         </div>
       </div>
-      <button class="btn secondary" id="btn-leave">← Salir de la sala</button>
+      <div style="display:flex;flex-direction:column;gap:8px;align-items:flex-end">
+        <button class="btn secondary" id="btn-leave">← Salir de la sala</button>
+        ${CAM_PANEL_HTML}
+      </div>
     </div>
     <div class="map-bottom-dock">
       <div id="dc-note" class="dc-note hidden"></div>
@@ -68,7 +75,9 @@ export function renderUserView(app) {
   `
   app.appendChild(view)
 
-  // Vista 2D fija; la flota propia (owner = mi slot) se dibuja resaltada
+  // Arranca cenital (la vista la cambia el usuario con camPanel); la flota propia
+  // (owner = mi slot) se dibuja resaltada. highlightOwner es además el slot que la
+  // cámara conductor sigue: su vehículo personal es owner + PERSONAL_OFFSET.
   const world = createOnlineWorld(view.querySelector('#sim-canvas'), {
     initialMode: '2d',
     highlightOwner: session.slot,
@@ -122,7 +131,7 @@ export function renderUserView(app) {
     selDest.disabled = true
   }
 
-  // invoke_vehicle = MI vehículo personal (el de la decisión de 5s); invoke_fleet = la flota
+  // invoke_vehicle = MI vehículo personal; invoke_fleet = la flota
   btnPersonal.addEventListener('click', () => {
     session.socket.send({ type: 'invoke_vehicle', userId: session.slot })
     btnPersonal.disabled = true
@@ -151,6 +160,11 @@ export function renderUserView(app) {
   // Reusa el aviso efímero de arriba: es el canal de respuesta del volante.
   const drive = wireDrivePanel(view, world, showNote)
 
+  // ── Selector de vista: cenital / libre / conductor ──
+  // Comparte el criterio del volante (personal.active): se conduce y se sigue al
+  // mismo vehículo, así que los dos aparecen y desaparecen juntos.
+  const cam = wireCamPanel(view, world, showNote)
+
   // ── Estado que llega del servidor ──
   function showSimInfo(m) {
     world.applySimInfo(m)
@@ -171,6 +185,9 @@ export function renderUserView(app) {
     // El volante lo abre y lo cierra el servidor (personal.active), igual que los
     // bloqueos: así sobrevive a recargas y no queda abierto tras un reset.
     drive.applyFleet(mine)
+    // Misma fuente que el volante: sin vehículo rodando no hay a quién seguir, y
+    // si se lo estaba siguiendo la cámara vuelve sola a la cenital.
+    cam.applyFleet(mine)
     const puntosFijos = routeSelectsDisabled(mine)
     selOrigin.disabled = puntosFijos
     selDest.disabled = puntosFijos

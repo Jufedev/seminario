@@ -32,6 +32,18 @@ const WHITE = new THREE.Color('#ffffff')
 // owner ≥ 100 = VEHÍCULO PERSONAL del slot (owner − 100): más grande y más claro
 export const PERSONAL_OFFSET = 100
 
+// ── Cámara conductor ('chase'): va detrás del vehículo personal ──
+// El ángulo es el compromiso del modo: bajarla da sensación de manejar, pero las
+// zonas rojas son planos a y=0.5 y desde el ras del piso se ven de canto. Con
+// estos valores la cámara mira ~21° hacia abajo (atan(8/21)), suficiente para
+// leer una celda de 30 unidades sin perder la vista de conductor. Quien quiera
+// verlas de verdad tiene el botón 2D — ver camControls.js.
+const CHASE_BACK = 15        // unidades detrás del auto
+const CHASE_HEIGHT = 9       // altura de la cámara sobre el piso
+const CHASE_AHEAD = 6        // el punto que mira, adelante del auto
+const CHASE_EYE = 1          // altura de ese punto (el techo del auto es 1.1)
+const CHASE_DAMP = 6         // suavizado exponencial (1/s); ver updateChase
+
 export function createOnlineWorld(canvas, { initialMode = '2d', onHud = null, highlightOwner = null } = {}) {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true })
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2))
@@ -58,6 +70,12 @@ export function createOnlineWorld(canvas, { initialMode = '2d', onHud = null, hi
 
   let mode = initialMode
   controls.enabled = mode === '3d'
+
+  // Blanco suavizado de la cámara conductor. Arranca en el centro del mapa para
+  // que un '3d' anterior a cualquier chase orbite donde siempre orbitó.
+  const _chaseTarget = new THREE.Vector3(MAP_CX, 0, MAP_CZ)
+  const _chaseWant = new THREE.Vector3(), _chaseLook = new THREE.Vector3()
+  let chaseSnap = true   // true = el próximo frame se planta sin barrer el mapa
 
   // ── Mundo estático: vías + rótulos + los 15 puntos con su color de categoría ──
   buildRoads(scene)
@@ -150,6 +168,33 @@ export function createOnlineWorld(canvas, { initialMode = '2d', onHud = null, hi
   let lastSnap = null
   let snapCount = 0
 
+  // Cámara conductor: se planta detrás del vehículo personal y mira adelante.
+  // El blanco sale de chatAnchors, que el bucle rehace cada frame con la posición
+  // YA interpolada — la misma que se dibuja. Seguir el snapshot crudo daría una
+  // cámara a tirones a 10 Hz sobre un auto que se mueve suave.
+  //
+  // Suavizado exponencial (1 − e^(−k·dt)) y no un lerp de factor fijo: el factor
+  // fijo ata la cámara al framerate, y este mundo corre a 60 Hz en una máquina y
+  // a 144 en otra. Sin él, cada giro del volante da un latigazo.
+  //
+  // Sin vehículo (no invocado, o ya llegado) devuelve false y NO toca la cámara:
+  // congelar es lo correcto por un frame suelto entre snapshots. Salir de chase
+  // cuando el vehículo deja la vía es decisión de la vista, no de acá (camControls).
+  function updateChase(dt) {
+    const ag = highlightOwner != null ? chatAnchors.get(highlightOwner) : null
+    if (!ag) return false
+    // heading = atan2(dx, dz) (agents.js) ⇒ el frente del auto es (sin h, cos h)
+    const fx = Math.sin(ag.h), fz = Math.cos(ag.h)
+    _chaseWant.set(ag.x - fx * CHASE_BACK, CHASE_HEIGHT, ag.z - fz * CHASE_BACK)
+    _chaseLook.set(ag.x + fx * CHASE_AHEAD, CHASE_EYE, ag.z + fz * CHASE_AHEAD)
+    const k = chaseSnap ? 1 : 1 - Math.exp(-CHASE_DAMP * dt)
+    perspCam.position.lerp(_chaseWant, k)
+    _chaseTarget.lerp(_chaseLook, k)
+    perspCam.lookAt(_chaseTarget)
+    chaseSnap = false
+    return true
+  }
+
   function resize() {
     const w = canvas.clientWidth, h = canvas.clientHeight
     renderer.setSize(w, h, false)
@@ -218,14 +263,31 @@ export function createOnlineWorld(canvas, { initialMode = '2d', onHud = null, hi
       snapCount = 0; hudTimer = 0
     }
 
+    // OrbitControls y la cámara conductor se pelean por perspCam.position: solo
+    // uno de los dos puede correr por frame, y por eso chase apaga los controls.
     if (mode === '3d') controls.update()
+    else if (mode === 'chase') updateChase(dt)
     renderer.render(scene, mode === '2d' ? orthoCam : perspCam)
   }
   animate()
 
   return {
     get mode() { return mode },
-    setMode(m) { mode = m; controls.enabled = m === '3d' },
+    setMode(m) {
+      if (m === mode) return
+      // Al SALIR de conductor, la órbita hereda el punto que la cámara venía
+      // mirando. OrbitControls recompone perspCam alrededor de SU target: si
+      // quedara en el centro del mapa, el primer update() daría un latigazo
+      // desde el auto hasta allá. Se copia al salir hacia cualquier modo, no
+      // solo hacia '3d', porque la cámara se queda donde la dejó el conductor
+      // y un '2d' de por medio no la mueve.
+      if (mode === 'chase') controls.target.copy(_chaseTarget)
+      // Al ENTRAR, plantarse detrás del auto en el primer frame en vez de barrer
+      // el mapa entero hasta él.
+      if (m === 'chase') chaseSnap = true
+      mode = m
+      controls.enabled = m === '3d'
+    },
 
     // sim_info (M3): una ruta óptima por flota configurada, en el color de su dueño
     applySimInfo(msg) {
