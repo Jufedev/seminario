@@ -176,9 +176,21 @@ setInterval(() => {
     if (room.sim.running) room.sim.maybeSampleAvatarPositions(dt, room.code)
     room.broadcast(room.sim.snapshot())
   }
-  // Las salas destruidas se olvidan también en el store de zonas rojas: su código
-  // se recicla, y lo que quede indexado ahí se lo heredaría la próxima sala.
-  for (const code of rooms.sweep()) redStore.forgetRoom(code)
+  // ── El ÚNICO lugar que sabe que una sala murió ──
+  // `RoomManager.create()` solo evita los códigos de las salas VIVAS: el de una
+  // destruida SE RECICLA. Así que todo lo que esté indexado por código de sala y
+  // viva fuera de `rooms` tiene que enterarse acá, o la sala nueva hereda el estado
+  // de una sesión ajena y muerta.
+  //
+  // Este proyecto recicla identificadores a propósito (slots de usuario, índices de
+  // agente, códigos de sala) y ya tropezó cuatro veces con la misma piedra: una
+  // caché indexada por un id reciclable que nadie limpia donde ese id muere. Este
+  // bucle es la contramedida para los códigos de sala: **si agregás estado por
+  // sala en algún lado, sumalo a esta lista.**
+  for (const code of rooms.sweep()) {
+    redStore.forgetRoom(code)
+    analytics.forgetRoom(code)
+  }
 }, 1000 / TICK_HZ)
 
 // ── Emisión de analítica (cada ~1s): el consumidor agrega, el server la manda al

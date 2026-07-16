@@ -9,6 +9,7 @@ import { measuredSpeedMps } from '../server/speed.js'
 import { GRID_COLS, GRID_ROWS, zoneIndexAt } from '../server/zoneGrid.js'
 import { RedPointStore } from '../analytics/redPoints.js'
 import { AnalyticsConsumer } from '../analytics/consumer.js'
+import { RoomManager } from '../server/rooms.js'
 import { KafkaBridge, SIM_EVENTS_TOPIC } from '../server/kafkaProducer.js'
 import { ZoneSystem } from '../src/analytics/zones.js'
 import { createEdgeState } from '../src/graph/mapData.js'
@@ -413,6 +414,31 @@ describe('ZoneSystem metricsOnly (telemetría del dashboard sin tocar el grafo)'
   })
 })
 
+// El cableado que lleva la limpieza a través del límite de módulo. Los tests de
+// forgetRoom prueban cada store por separado; ESTE prueba el contrato que los une:
+// que sweep() DEVUELVA los códigos que destruyó. Sin él, un refactor que se coma el
+// return dejaría toda la suite en verde mientras el bug de reciclado vuelve.
+describe('RoomManager.sweep (el contrato que dispara la limpieza por sala)', () => {
+  test('devuelve los códigos que destruyó, para que quien tenga estado por sala lo olvide', () => {
+    const rm = new RoomManager()
+    const room = rm.create()
+    expect(rm.sweep()).toEqual([])                      // recién creada: nadie la barre
+
+    room.emptySince = Date.now() - 61_000               // vacía hace más del TTL
+    expect(rm.sweep()).toEqual([room.code])             // la barre Y dice cuál era
+    expect(rm.get(room.code)).toBeFalsy()               // y ya no existe
+  })
+
+  test('una sala con gente no se barre ni se reporta', () => {
+    const rm = new RoomManager()
+    const room = rm.create()
+    room.joinAdmin({}, 'admin')                          // hay alguien → emptySince null
+    room.emptySince = null
+    expect(rm.sweep()).toEqual([])
+    expect(rm.get(room.code)).toBeTruthy()
+  })
+})
+
 describe('AnalyticsConsumer (zonas rojas del dashboard = detector Spark, no el índice C)', () => {
   const consumer = () => new AnalyticsConsumer({ bridge: { mode: 'local', emitter: new EventEmitter() } })
 
@@ -421,6 +447,29 @@ describe('AnalyticsConsumer (zonas rojas del dashboard = detector Spark, no el �
     c._ingest('agent.position', { room: 'ECCI-1234', avg_speed_mps: 3, stuck: 0, moving: 1, waiting: 0, arrived: 0 })
     c.noteSparkRedZones('ECCI-1234', 3)
     expect(c.metricsForAdmin('ECCI-1234').global.redZones).toBe(3)
+  })
+
+  // El código de sala se recicla (RoomManager.create solo evita los de las VIVAS):
+  // sin olvidar, la sala nueva hereda las series y el desglose de la muerta.
+  test('una sala destruida no le hereda su analítica a la que recicle su código', () => {
+    const c = consumer()
+    c._ingest('agent.position', { room: 'ECCI-1234', avg_speed_mps: 3, stuck: 0, moving: 5, waiting: 0, arrived: 7 })
+    expect(c.metricsForAdmin('ECCI-1234').global.arrived).toBe(7)   // la vieja acumuló
+
+    c.forgetRoom('ECCI-1234')                                        // el barrido la destruyó
+
+    // Sala nueva con el mismo código: sin estado previo. metricsForAdmin devuelve
+    // null porque la sala nueva todavía no produjo ni un evento.
+    expect(c.metricsForAdmin('ECCI-1234')).toBeNull()
+  })
+
+  test('forgetRoom es por sala: no toca la analítica de las demás', () => {
+    const c = consumer()
+    for (const room of ['ECCI-1234', 'ECCI-9999']) {
+      c._ingest('agent.position', { room, avg_speed_mps: 3, stuck: 0, moving: 1, waiting: 0, arrived: 4 })
+    }
+    c.forgetRoom('ECCI-1234')
+    expect(c.metricsForAdmin('ECCI-9999').global.arrived).toBe(4)
   })
 
   test('analytics.snapshot alimenta C̄ y el heatmap pero NO pisa el conteo de Spark', () => {

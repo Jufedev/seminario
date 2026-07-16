@@ -120,6 +120,21 @@ export class AnalyticsConsumer {
     console.log('[analytics] consumidor en modo local (bus en-proceso)')
   }
 
+  // La sala murió (barrido de salas vacías): se olvida su estado agregado.
+  //
+  // Mismo motivo que en RedPointStore.forgetRoom, y por la misma razón de fondo:
+  // `RoomManager.create()` solo evita los códigos de las salas VIVAS, así que el de
+  // una destruida se recicla. Sin esto, la sala nueva que caiga en ese código
+  // heredaría las series, los tiempos de viaje y el desglose por usuario de una
+  // sesión ajena y muerta — y el tablero se los mostraría como propios.
+  //
+  // Acá NO hace falta la barrera temporal que sí lleva RedPointStore: los eventos
+  // de esta sala salen del propio servidor y paran en seco cuando la sala muere;
+  // no hay un Spark aguas arriba con ventanas abiertas emitiendo rezagados.
+  forgetRoom(roomCode) {
+    this.rooms.delete(roomCode)
+  }
+
   _room(code) {
     if (!code) return null
     let st = this.rooms.get(code)
