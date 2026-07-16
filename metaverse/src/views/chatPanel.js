@@ -75,5 +75,8 @@ export function wireChatPanel(view, world) {
     if (m.slot === 0) announce.announce(m.name, m.text)
     else world.sayChat(m.slot, m.text)
   })
-  return () => { off(); announce.dispose() }
+  // Quien sale de la sala se lleva su burbuja. Va acá y no en las vistas porque es
+  // la misma regla del chat en las dos, y acá ya vive el resto del chat.
+  const offMembers = session.on('room_state', rs => world.syncChatMembers(rs.users.map(u => u.slot)))
+  return () => { off(); offMembers(); announce.dispose() }
 }

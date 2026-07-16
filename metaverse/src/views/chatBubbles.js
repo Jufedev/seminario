@@ -86,6 +86,14 @@ function makeBubbleSprite(text, color) {
   return sprite
 }
 
+// Qué burbujas sobran, dado quién sigue en la sala. Pura y exportada —como
+// wrapLines— para poder probarla sin THREE ni canvas: el resto de este módulo
+// necesita las dos cosas y solo se prueba en el navegador.
+export function staleChatSlots(bubbleSlots, memberSlots) {
+  const vivos = new Set(memberSlots)
+  return [...bubbleSlots].filter(slot => !vivos.has(slot))
+}
+
 export function createChatBubbles(scene) {
   const bubbles = new Map()   // slot → { sprite, born }
 
@@ -124,6 +132,20 @@ export function createChatBubbles(scene) {
         b.sprite.position.set(at.x, HEAD_ROOM + half, flat ? at.z - half - 4 : at.z)
         b.sprite.material.opacity = chatOpacity(age)
       }
+    },
+
+    // Se fue quien hablaba: su burbuja se va con él. El Map se indexa por SLOT, y el
+    // servidor recicla el slot libre más bajo al siguiente que entra (rooms.js), así
+    // que una burbuja que sobrevive a su autor queda apuntando a una casilla que ya
+    // es de otra persona. Hoy no se ve —el candado de invocación le deja el botón
+    // bloqueado al nuevo, así que no llega a tener avatar en ese slot hasta un
+    // reinicio, y el reinicio borra los dos—, pero eso es estar a salvo por un
+    // invariante AJENO: el día que alguien libere `personalInvoked` al salir (un
+    // cambio razonable: ¿por qué queda trabado el slot de alguien que se fue?), el
+    // mensaje de uno aparecería sobre el avatar de otro. Se corta acá, que es el
+    // único lado que sabe de quién es cada burbuja.
+    keepOnly(slots) {
+      for (const slot of staleChatSlots(bubbles.keys(), slots)) drop(slot)
     },
 
     dispose() { for (const slot of [...bubbles.keys()]) drop(slot) },

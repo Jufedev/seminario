@@ -323,6 +323,10 @@ export function createOnlineWorld(canvas, { initialMode = '2d', onHud = null, hi
       bubbles.say(slot, text, color)
     },
 
+    // room_state → las burbujas de los que ya no están en la sala se retiran. Ver
+    // keepOnly() en chatBubbles.js: el slot se recicla, la burbuja no puede quedarse.
+    syncChatMembers(slots) { bubbles.keepOnly(slots) },
+
     // world_snapshot del servidor: buffer + semáforos + incidentes
     pushSnapshot(msg) {
       interp.push(msg)

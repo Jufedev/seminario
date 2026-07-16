@@ -7,7 +7,7 @@
 import { describe, expect, test } from 'bun:test'
 import { Room } from '../server/rooms.js'
 import { buildChatMessage, sanitizeChatText, ChatRateLimiter, MAX_CHAT_LEN } from '../server/chat.js'
-import { wrapLines } from '../src/views/chatBubbles.js'
+import { wrapLines, staleChatSlots } from '../src/views/chatBubbles.js'
 import { chatOpacity, chatExpired, CHAT_DWELL_MS, CHAT_FADE_MS } from '../src/views/chatTiming.js'
 
 // La simulación de cada sala hace console.debug de sus eventos; se silencia
@@ -149,6 +149,29 @@ describe('recorte de la burbuja (wrapLines)', () => {
     const lines = wrapLines('ab '.repeat(20).trim())
     expect(lines.length).toBeLessThanOrEqual(LINES)
     expect(lines.join(' ')).toBe('ab '.repeat(20).trim())
+  })
+})
+
+// El servidor recicla el slot libre más bajo (rooms.js joinUser), y la burbuja se
+// indexa por slot: una que sobreviva a su autor apunta a una casilla que puede ser
+// ya de otro. Hoy el candado de invocación tapa esa grieta —el que entra no llega a
+// tener avatar en ese slot—, pero eso es un invariante ajeno al chat. Esta regla la
+// cierra sin depender de él.
+describe('la burbuja no sobrevive a su autor (staleChatSlots)', () => {
+  test('el que se fue de la sala pierde su burbuja', () => {
+    expect(staleChatSlots([1, 2, 3], [1, 3])).toEqual([2])
+  })
+
+  test('los que siguen en la sala conservan la suya', () => {
+    expect(staleChatSlots([1, 2], [1, 2])).toEqual([])
+  })
+
+  test('sala vacía: no queda ninguna', () => {
+    expect(staleChatSlots([1, 2, 3], [])).toEqual([1, 2, 3])
+  })
+
+  test('un slot sin burbuja no molesta', () => {
+    expect(staleChatSlots([2], [1, 2, 3])).toEqual([])
   })
 })
 
