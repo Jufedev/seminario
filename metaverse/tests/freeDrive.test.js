@@ -554,6 +554,30 @@ describe('ruta sugerida (drive_state.route)', () => {
     sim._driveStateFor(personal)
     expect(sim._suggestCache.get(personal).at).toBeGreaterThan(cache1.at)
   })
+
+  // La otra mitad de "no puede quedar rancia", y la que el reloj NO cubre: el reset
+  // devuelve `time` a 0, así que una entrada vieja queda con su `at` en el FUTURO y
+  // `time - at` da NEGATIVO — que también pasa el guardia `< SUGGEST_EVERY_S`. Como
+  // el cache se indexa por posición en el array de agentes y resetAgents() reinicia
+  // el contador, el vehículo nuevo hereda la clave del viejo: la línea punteada
+  // dibujaría la ruta de la corrida anterior durante toda la corrida nueva.
+  test('el reset no deja la ruta sugerida de la corrida anterior', () => {
+    const { sim, personal } = roomWithBoth()
+    for (let t = 0; t < 30; t++) sim.step(0.05)
+    sim.time += 1                                    // vencer el cache: la entrada se refresca al `time` de AHORA
+    const vieja = sim._driveStateFor(personal).route
+    expect(sim._suggestCache.get(personal).at).toBeGreaterThan(1)   // sin un `at` alto no hay futuro que heredar
+
+    sim.control('reset')
+    sim.setUserRoute(1, 'T1', 'T4')                  // destino DISTINTO: la ruta vieja ya no puede servir
+    sim.invokePersonal(1)
+    for (let t = 0; t < 10; t++) sim.step(0.05)
+
+    const nuevo = sim._personalAgent(1)
+    const route = sim._driveStateFor(nuevo).route
+    expect(route[route.length - 1]).toBe(sim.agents.destNode[nuevo])
+    expect(route.join('>')).not.toBe(vieja.join('>'))
+  })
 })
 
 describe('setDriveThrottle (el acelerador, validado en el servidor)', () => {

@@ -64,11 +64,17 @@ export function wireDrivePanel(view, world, showNote) {
 
   // Acelerador. Se manda SOLO en el cambio: mantener la tecla dispara un keydown
   // repetido ~30 veces por segundo, y cada uno sería un mensaje idéntico.
+  // El `?.` no es defensa por las dudas: dispose() suelta el acelerador (ver abajo)
+  // y la salida de la sala hace `session.leave()` ANTES de desmontar la vista, así
+  // que el socket YA es null cuando llega el `off`. Sin la guarda, salir con la
+  // tecla pisada tiraba un TypeError adentro del teardown y se llevaba puesto el
+  // resto: sin world.dispose(), quedaban vivos el bucle de render y el WebGL.
+  // El servidor no queda esperando ese `off`: al cerrarse el socket lo suelta él.
   function setThrottle(on) {
     if (!visible && on) return
     if (on === throttling) return
     throttling = on
-    session.socket.send({ type: 'drive_throttle', on })
+    session.socket?.send({ type: 'drive_throttle', on })
     render()
   }
 

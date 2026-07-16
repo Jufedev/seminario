@@ -386,6 +386,13 @@ export class Simulation {
     this.personalInvoked.clear()
     this.alertSent.clear()
     this._driveStateSent.clear()   // resetAgents() borró los avatares: no hay estado que recordar
+    // Y la ruta sugerida de cada uno, por lo mismo. Obligatorio, no higiene: abajo
+    // `this.time` vuelve a 0, así que una entrada vieja deja `time - at` NEGATIVO y
+    // el guardia de frescura (`< SUGGEST_EVERY_S`) la da por fresca durante toda la
+    // corrida nueva. La caché se indexa por posición en el array de agentes, y
+    // resetAgents() reinicia el contador: el vehículo nuevo hereda la clave —y la
+    // ruta— del viejo.
+    this._suggestCache.clear()
     for (const slot of this.routesByUser.keys()) this.routeSetAt.set(slot, Date.now())
     // Feed por-avatar y zonas rojas de Spark, frescos para la corrida nueva.
     // resetGraph() ya limpió las penalizaciones de las zonas rojas anteriores.
